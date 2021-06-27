@@ -1,3 +1,4 @@
+// re2c $INPUT -o $OUTPUT 
 /*!re2c
     re2c:flags:b = 0;
     re2c:flags:bit-vectors = 1;
@@ -13,6 +14,7 @@
     re2c:flags:tags = 1;
     re2c:flags:case-insensitive = 0;
     re2c:flags:case-inverted = 1;
+    re2c:flags:case-ranges = 1;
 
     re2c:flags:e = 1;
     re2c:flags:ecb = 0;

@@ -16,17 +16,17 @@ static const tagver_t TAGVER_BOTTOM = std::numeric_limits<tagver_t>::min(); // d
 static const tagver_t TAGVER_ZERO = 0; // absense of tag
 static const tagver_t TAGVER_CURSOR = std::numeric_limits<tagver_t>::max(); // current position, highest priority
 
-struct tag_info_t
-{
-    uint32_t idx : 31;
-    uint32_t neg : 1;
+struct tag_info_t {
+    uint32_t idx; // tag index (starting from zero)
+    uint32_t neg; // tag sign (1 for negative, 0 for positive)
 };
 
 struct Tag
 {
     static const size_t RIGHTMOST;
-    static const size_t VARDIST;
+    static const uint32_t VARDIST;
     static const size_t FICTIVE;
+    static const size_t NONE;
 
     const std::string *name;
     size_t lsub;
@@ -37,18 +37,16 @@ struct Tag
     size_t hnest;
     bool history;
     bool orbit;
+    bool toplevel;
     int32_t height;
 
     Tag(const std::string *nm, bool hi, int32_t ht);
-    Tag(size_t lsub, size_t hsub, bool ob, int32_t ht);
+    Tag(size_t lsub, size_t hsub, bool history, bool orbit, int32_t height);
 };
 
 inline bool operator == (const tag_info_t &x, const tag_info_t &y)
 {
-    // per-component comparison is slower
-    RE2C_STATIC_ASSERT(sizeof(tag_info_t) == sizeof(uint32_t));
-    return *reinterpret_cast<const uint32_t*>(&x)
-        == *reinterpret_cast<const uint32_t*>(&y);
+    return x.idx == y.idx && x.neg == y.neg;
 }
 
 inline bool fixed(const Tag &tag)

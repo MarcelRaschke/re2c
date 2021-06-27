@@ -1,8 +1,7 @@
 #include "src/msg/msg.h"
 #include "src/parse/input.h"
 #include "src/parse/scanner.h"
-#include "src/util/get_dir.h"
-#include "src/util/string_utils.h"
+#include "src/util/file_utils.h"
 
 
 namespace re2c {
@@ -10,6 +9,7 @@ namespace re2c {
 Input::Input(size_t fidx)
     : file(NULL)
     , name()
+    , path()
     , escaped_name()
     , so(Scanner::ENDPOS)
     , eo(Scanner::ENDPOS)
@@ -20,7 +20,6 @@ Input::Input(size_t fidx)
 bool Input::open(const std::string &filename, const std::string *parent
     , const std::vector<std::string> &incpaths)
 {
-    std::string path;
     name = filename;
 
     if (!parent) {
@@ -48,12 +47,12 @@ bool Input::open(const std::string &filename, const std::string *parent
     }
 
     if (!file) {
-        fatal("cannot open file: %s", name.c_str());
+        error("cannot open file: %s", name.c_str());
+        exit(1);
     }
 
     // name displayed in #line directives is the resolved name
-    escaped_name = path;
-    strrreplace(escaped_name, "\\", "\\\\");
+    escaped_name = escape_backslashes(path);
 
     return true;
 }

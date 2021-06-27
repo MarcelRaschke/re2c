@@ -1,3 +1,4 @@
+SUBDIRS = .
 
 # stdlib directory
 stdlibdir = $(datadir)/re2c/stdlib
@@ -9,22 +10,16 @@ if DEBUG
 AM_CXXFLAGS += -DRE2C_DEBUG
 endif
 
-RE2CFLAGS = -br -W
+RE2CFLAGS = -br -W -Wno-match-empty-string
 
 # binary
 bin_PROGRAMS = re2c
 noinst_PROGRAMS =
-RE2C = re2c$(EXEEXT)
 
 # sources
 re2c_HDR = \
-	src/codegen/bitmap.h \
-	src/codegen/emit.h \
-	src/codegen/go.h \
-	src/codegen/input_api.h \
-	src/codegen/label.h \
-	src/codegen/output.h \
-	src/codegen/print.h \
+	src/codegen/code.h \
+	src/codegen/helpers.h \
 	src/options/opt.h \
 	src/adfa/action.h \
 	src/adfa/adfa.h \
@@ -57,6 +52,7 @@ re2c_HDR = \
 	src/regexp/rule.h \
 	src/regexp/tag.h \
 	src/compile.h \
+	src/skeleton/mtag_trie.h \
 	src/skeleton/path.h \
 	src/skeleton/skeleton.h \
 	src/parse/ast.h \
@@ -68,11 +64,10 @@ re2c_HDR = \
 	src/util/allocate.h \
 	src/util/attribute.h \
 	src/util/c99_stdint.h \
-	src/util/counter.h \
+	src/util/file_utils.h \
 	src/util/fixed_allocator.h \
 	src/util/forbid_copy.h \
 	src/util/free_list.h \
-	src/util/get_dir.h \
 	src/util/hash32.h \
 	src/util/local_increment.h \
 	src/util/lookup.h \
@@ -84,20 +79,18 @@ re2c_HDR = \
 	src/util/string_utils.h \
 	src/util/temp_file.h \
 	src/util/u32lim.h \
-	src/util/uniq_vector.h \
-	src/util/wrap_iter.h
+	src/util/uniq_vector.h
 re2c_SRC = \
-	src/codegen/bitmap.cc \
-	src/codegen/emit_action.cc \
-	src/codegen/emit_dfa.cc \
-	src/codegen/label.cc \
-	src/codegen/go_construct.cc \
-	src/codegen/go_destruct.cc \
-	src/codegen/go_emit.cc \
-	src/codegen/go_used_labels.cc \
-	src/codegen/input_api.cc \
-	src/codegen/output.cc \
-	src/codegen/print.cc \
+	src/codegen/code_goto.cc \
+	src/codegen/combine.cc \
+	src/codegen/gen_bitmaps.cc \
+	src/codegen/gen_delayed.cc \
+	src/codegen/gen_dfa.cc \
+	src/codegen/gen_goto.cc \
+	src/codegen/gen_program.cc \
+	src/codegen/gen_state.cc \
+	src/codegen/helpers.cc \
+	src/codegen/render.cc \
 	src/options/opt.cc \
 	src/nfa/estimate_size.cc \
 	src/nfa/re_to_nfa.cc \
@@ -153,11 +146,10 @@ re2c_SRC = \
 	src/skeleton/skeleton.cc \
 	src/parse/ast.cc \
 	src/parse/input.cc \
-	src/parse/normalize.cc \
+	src/parse/parse.cc \
 	src/parse/scanner.cc \
 	src/parse/unescape.cc \
-	src/parse/validate.cc \
-	src/util/get_dir.cc \
+	src/util/file_utils.cc \
 	src/util/s_to_n32_unsafe.cc \
 	src/util/temp_file.cc \
 	src/util/range.cc
@@ -193,10 +185,12 @@ BUILT_SOURCES = $(re2c_GEN_SRC)
 # bootstrap sources
 re2c_BOOT_PARSER = bootstrap/src/parse/parser.cc
 re2c_BOOT_PARSER_HDR = bootstrap/src/parse/parser.h
-re2c_BOOT_DOC = bootstrap/doc/re2c.1
+re2c_BOOT_DOC_C = bootstrap/doc/re2c.1
+re2c_BOOT_DOC_GO = bootstrap/doc/re2go.1
 re2c_BOOT_HELP = bootstrap/src/msg/help.cc
 re2c_BOOT = \
-	$(re2c_BOOT_DOC) \
+	$(re2c_BOOT_DOC_C) \
+	$(re2c_BOOT_DOC_GO) \
 	$(re2c_BOOT_HELP) \
 	$(re2c_BOOT_PARSER) \
 	$(re2c_BOOT_PARSER_HDR) \
@@ -227,86 +221,133 @@ re2c_SRC_DOC_EXT = \
 	doc/manual/directives/directives.rst_ \
 	doc/manual/dot/dot.rst_ \
 	doc/manual/encodings/encodings.rst_ \
-	doc/manual/eof/01_sentinel.re \
 	doc/manual/eof/01_sentinel.rst_ \
-	doc/manual/eof/02_bounds_checking.re \
 	doc/manual/eof/02_bounds_checking.rst_ \
-	doc/manual/eof/03_eof_rule.re \
 	doc/manual/eof/03_eof_rule.rst_ \
-	doc/manual/eof/04_generic_api.re \
 	doc/manual/eof/04_generic_api.rst_ \
 	doc/manual/eof/eof.rst_ \
-	doc/manual/fill/01_fill.re \
 	doc/manual/fill/01_fill.rst_ \
-	doc/manual/fill/02_fill.re \
 	doc/manual/fill/02_fill.rst_ \
 	doc/manual/fill/fill.rst_ \
-	doc/manual/fill/input.txt \
 	doc/manual/headers/headers.rst_ \
 	doc/manual/includes/includes.rst_ \
 	doc/manual/options/debug.rst_ \
 	doc/manual/options/internal.rst_ \
 	doc/manual/options/options.rst_ \
 	doc/manual/regexps/regular_expressions.rst_ \
-	doc/manual/reuse/reuse.re \
 	doc/manual/reuse/reuse.rst_ \
 	doc/manual/skeleton/skeleton.rst_ \
-	doc/manual/state/push.re \
 	doc/manual/state/state.rst_ \
-	doc/manual/submatch/mtags.re \
-	doc/manual/submatch/posix.re \
-	doc/manual/submatch/stags.re \
 	doc/manual/submatch/submatch_example_mtags.rst_ \
 	doc/manual/submatch/submatch_example_posix.rst_ \
 	doc/manual/submatch/submatch_example_stags.rst_ \
+	doc/manual/submatch/submatch_example_stags_fill.rst_ \
 	doc/manual/submatch/submatch.rst_ \
 	doc/manual/syntax/syntax.rst_ \
 	doc/manual/warnings/warnings_general.rst_ \
-	doc/manual/warnings/warnings_list.rst_
+	doc/manual/warnings/warnings_list.rst_ \
+	examples/c/01_basic.re \
+	examples/c/conditions/parse_u32_conditions.re \
+	examples/c/encodings/unicode_identifier.re \
+	examples/c/eof/01_sentinel.re \
+	examples/c/eof/02_bounds_checking.re \
+	examples/c/eof/03_eof_rule.re \
+	examples/c/eof/05_generic_api_eof_rule.re \
+	examples/c/fill/01_fill.re \
+	examples/c/fill/02_fill.re \
+	examples/c/headers/header.re \
+	examples/c/headers/src/lexer/lexer.h \
+	examples/c/includes/include.re \
+	examples/c/includes/definitions.h \
+	examples/c/reuse/reuse.re \
+	examples/c/reuse/usedir.re \
+	examples/c/state/push.re \
+	examples/c/submatch/01_stags.re \
+	examples/c/submatch/01_stags_fill.re \
+	examples/c/submatch/02_mtags.re \
+	examples/c/submatch/03_posix.re \
+	examples/go/01_basic.re \
+	examples/go/conditions/parse_u32_conditions.re \
+	examples/go/encodings/unicode_identifier.re \
+	examples/go/eof/01_sentinel.re \
+	examples/go/eof/02_bounds_checking.re \
+	examples/go/eof/03_eof_rule.re \
+	examples/go/eof/05_generic_api_eof_rule.re \
+	examples/go/fill/01_fill.re \
+	examples/go/fill/02_fill.re \
+	examples/go/headers/header.re \
+	examples/go/headers/src/lexer/lexer.go \
+	examples/go/includes/include.re \
+	examples/go/includes/definitions.go \
+	examples/go/reuse/reuse.re \
+	examples/go/reuse/usedir.re \
+	examples/go/state/push.re \
+	examples/go/submatch/01_stags.re \
+	examples/go/submatch/02_mtags.re \
+	examples/go/submatch/03_posix.re
 
-DOC = doc/re2c.1
-man_MANS = $(DOC)
+DOC_C = doc/re2c.1
+DOCS = $(DOC_C)
+if WITH_GOLANG
+DOC_GO = doc/re2go.1
+DOCS += $(DOC_GO)
+endif
+man_MANS = $(DOCS)
 
 # include files (stdlib)
 dist_stdlib_DATA = include/unicode_categories.re
+
+CMAKEFILES := \
+	CMakeLists.txt \
+	cmake
 
 EXTRA_DIST = \
 	$(re2c_BOOT) \
 	$(re2c_CUSTOM) \
 	$(re2c_SRC_DOC_EXT) \
+	$(CMAKEFILES) \
 	CHANGELOG \
 	LICENSE \
 	NO_WARRANTY \
 	README.md \
 	autogen.sh \
-	genhelp.sh \
+	build \
 	examples \
 	test
 
 CLEANFILES = \
 	$(re2c_GEN) \
-	$(DOC)
+	$(DOCS)
 
+if REBUILD_LEXERS
+# generate lexer and update bootstrap files
 .re.cc:
 	$(AM_V_at)$(MKDIR_P) $(@D)
-	$(AM_V_GEN) if test -x $(RE2C); \
+	$(AM_V_GEN)if test -x $(RE2C_FOR_BUILD); \
 	then \
-		$(top_builddir)/$(RE2C) $(RE2CFLAGS) -o $@ $< && \
+		$(RE2C_FOR_BUILD) $(RE2CFLAGS) -o $@ $< && \
 		cp $(@:cc=[ch]*) $(top_srcdir)/bootstrap/$(@D); \
 	else \
-		cp $(top_srcdir)/bootstrap/$(@:cc=*) $(@D); \
+		echo "RE2C is not an executable file" && exit 1 ; \
 	fi
+else
+# copy bootstrap files
+.re.cc:
+	$(AM_V_at)$(MKDIR_P) $(@D)
+	$(AM_V_GEN)cp $(top_srcdir)/bootstrap/$(@:cc=*) $(@D)
+	$(AM_V_at)echo "Reconfigure with --enable-lexers to regenerate $@"
+endif
 
 # cannot update bootstrap with distcheck (it makes srcdir readonly),
 # so we update bootstrap only on incremental build (if re2c binary exists)
 .ypp.cc:
 	$(AM_V_at)$(MKDIR_P) $(@D)
-	$(AM_V_GEN) if test $(BISON) = "no"; \
+	$(AM_V_GEN)if test $(BISON) = "no"; \
 	then \
 		cp $(top_srcdir)/bootstrap/$(@:cc=*) $(@D); \
 	else \
 		$(BISON) --output=$@ --defines=$(@:cc=h) $< && \
-		if test -x $(RE2C); then \
+		if test -x $(top_builddir)/re2c$(EXEEXT); then \
 			cp $@ $(@:cc=h) $(top_srcdir)/bootstrap/$(@D); \
 		fi; \
 	fi
@@ -322,22 +363,42 @@ bootstrap: all
 
 .PHONY: docs
 if REBUILD_DOCS
-docs: $(DOC) $(re2c_GEN_HELP)
-$(DOC): $(re2c_SRC_DOC) $(re2c_SRC_DOC_EXT)
+docs: $(DOCS) $(re2c_GEN_HELP)
+GENHELP = $(top_srcdir)/build/gen_help.sh
+SPLITMAN = $(top_srcdir)/build/split_man.sh
+# generate manpage for C
+$(DOC_C): $(re2c_SRC_DOC) $(re2c_SRC_DOC_EXT) $(SPLITMAN)
 	$(AM_V_at)$(MKDIR_P) $(@D)
-	$(RST2MAN) $(top_builddir)/$(re2c_SRC_DOC) > $@
-	$(AM_V_GEN)cp $@ $(top_srcdir)/$(re2c_BOOT_DOC)
-$(re2c_GEN_HELP): $(re2c_CUSTOM_HELP)
+	$(AM_V_GEN)$(SPLITMAN) $(top_builddir)/$(re2c_SRC_DOC) $(top_builddir)/$(re2c_SRC_DOC).c c \
+		&& $(RST2MAN) --tab-width=4 $(top_builddir)/$(re2c_SRC_DOC).c > $@ \
+		&& cp $@ $(top_srcdir)/$(re2c_BOOT_DOC_C) \
+		&& rm $(top_builddir)/$(re2c_SRC_DOC).c
+# generate manpage for Go
+$(DOC_GO): $(re2c_SRC_DOC) $(re2c_SRC_DOC_EXT) $(SPLITMAN)
 	$(AM_V_at)$(MKDIR_P) $(@D)
-	$(RST2MAN) $(top_builddir)/$(re2c_CUSTOM_HELP) > $@.1
-	$(top_srcdir)/genhelp.sh $@.1 $@
-	$(AM_V_GEN)cp $@ $(top_srcdir)/$(re2c_BOOT_HELP)
+	$(AM_V_GEN)$(SPLITMAN) $(top_builddir)/$(re2c_SRC_DOC) $(top_builddir)/$(re2c_SRC_DOC).go go \
+		&& $(RST2MAN) --tab-width=4 $(top_builddir)/$(re2c_SRC_DOC).go > $@ \
+		&& cp $@ $(top_srcdir)/$(re2c_BOOT_DOC_GO) \
+		&& rm $(top_builddir)/$(re2c_SRC_DOC).go
+# generate help
+$(re2c_GEN_HELP): $(re2c_CUSTOM_HELP) $(GENHELP)
+	$(AM_V_at)$(MKDIR_P) $(@D)
+	$(AM_V_GEN)$(RST2MAN) $(top_builddir)/$(re2c_CUSTOM_HELP) > $@.1 \
+		&& $(GENHELP) $@.1 $@ \
+		&& cp $@ $(top_srcdir)/$(re2c_BOOT_HELP) \
+		&& rm $@.1
 else
-docs: $(DOC) $(re2c_GEN_HELP)
-	$(AM_V_at)echo "Reconfigure to rebuild docs: ./configure --enable-docs"
-$(DOC): $(re2c_BOOT_DOC)
+docs: $(DOCS) $(re2c_GEN_HELP)
+	$(AM_V_at)echo "Reconfigure with --enable-docs to rebuild docs"
+# copy bootstrap manpage for C
+$(DOC_C): $(re2c_BOOT_DOC_C)
 	$(AM_V_at)$(MKDIR_P) $(@D)
-	$(AM_V_GEN)cp $(top_srcdir)/$(re2c_BOOT_DOC) $@
+	$(AM_V_GEN)cp $(top_srcdir)/$(re2c_BOOT_DOC_C) $@
+# copy bootstrap manpage for Go
+$(DOC_GO): $(re2c_BOOT_DOC_GO)
+	$(AM_V_at)$(MKDIR_P) $(@D)
+	$(AM_V_GEN)cp $(top_srcdir)/$(re2c_BOOT_DOC_GO) $@
+# copy bootstrap help
 $(re2c_GEN_HELP): $(re2c_BOOT_HELP)
 	$(AM_V_at)$(MKDIR_P) $(@D)
 	$(AM_V_GEN)cp $(top_srcdir)/$(re2c_BOOT_HELP) $@
@@ -346,7 +407,7 @@ endif
 all-local: docs $(re2c_BOOT_PARSER)
 
 # tests
-re2c_TESTSUITE = run_tests.sh
+re2c_TESTSUITE = run_tests.py
 .PHONY: tests
 tests: all $(re2c_TESTSUITE)
 	$(top_builddir)/$(re2c_TESTSUITE)
@@ -373,19 +434,36 @@ re2c_test_ver_to_vernum_SOURCES = \
 	src/test/ver_to_vernum/test.cc \
 	$(re2c_GEN_VER_TO_VERNUM)
 
+re2c_test_argsubst_SOURCES = \
+	src/test/argsubst/test.cc
+
 check_PROGRAMS = \
 	re2c_test_range \
 	re2c_test_s_to_n32_unsafe \
-	re2c_test_ver_to_vernum
+	re2c_test_ver_to_vernum \
+	re2c_test_argsubst
 
 TESTS = \
 	$(re2c_TESTSUITE) \
 	$(check_PROGRAMS)
 
-# libraries go here (in included .am files)
+# benchmarks
+if WITH_BENCHMARKS
+SUBDIRS += benchmarks/submatch_dfa_aot
+EXTRA_DIST += benchmarks/submatch_dfa_aot
+endif
+
+# libre2c
 if WITH_LIBS
 ACLOCAL_AMFLAGS = -I m4
 lib_LTLIBRARIES =
 include $(top_srcdir)/Makefile.lib.am
 endif
 
+# re2go
+if WITH_GOLANG
+bin_PROGRAMS += re2go
+re2go_CXXFLAGS = $(AM_CXXFLAGS) -DRE2C_LANG=LANG_GO
+re2go_SOURCES = $(re2c_SOURCES)
+nodist_re2go_SOURCES = $(nodist_re2c_SOURCES)
+endif

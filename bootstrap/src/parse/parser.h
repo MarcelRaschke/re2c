@@ -1,8 +1,9 @@
-/* A Bison parser, made by GNU Bison 3.1.  */
+/* A Bison parser, made by GNU Bison 3.7.3.  */
 
 /* Bison interface for Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2020 Free Software Foundation,
+   Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -30,6 +31,10 @@
    This special exception was added by the Free Software Foundation in
    version 2.2 of Bison.  */
 
+/* DO NOT RELY ON FEATURES THAT ARE NOT DOCUMENTED in the manual,
+   especially those whose name start with YY_ or yy_.  They are
+   private implementation details that can be changed or removed.  */
+
 #ifndef YY_YY_SRC_PARSE_PARSER_H_INCLUDED
 # define YY_YY_SRC_PARSE_PARSER_H_INCLUDED
 /* Debug traces.  */
@@ -40,44 +45,49 @@
 extern int yydebug;
 #endif
 
-/* Token type.  */
+/* Token kinds.  */
 #ifndef YYTOKENTYPE
 # define YYTOKENTYPE
   enum yytokentype
   {
-    TOKEN_CJUMP = 258,
-    TOKEN_CNEXT = 259,
-    TOKEN_CLIST = 260,
-    TOKEN_CSETUP = 261,
-    TOKEN_CZERO = 262,
-    TOKEN_CLOSESIZE = 263,
-    TOKEN_CODE = 264,
-    TOKEN_CONF = 265,
-    TOKEN_ID = 266,
-    TOKEN_FID = 267,
-    TOKEN_FID_END = 268,
-    TOKEN_LINE_INFO = 269,
-    TOKEN_REGEXP = 270
+    YYEMPTY = -2,
+    YYEOF = 0,                     /* "end of file"  */
+    YYerror = 256,                 /* error  */
+    YYUNDEF = 257,                 /* "invalid token"  */
+    TOKEN_CJUMP = 258,             /* TOKEN_CJUMP  */
+    TOKEN_CNEXT = 259,             /* TOKEN_CNEXT  */
+    TOKEN_CLIST = 260,             /* TOKEN_CLIST  */
+    TOKEN_CSETUP = 261,            /* TOKEN_CSETUP  */
+    TOKEN_CZERO = 262,             /* TOKEN_CZERO  */
+    TOKEN_CLOSESIZE = 263,         /* TOKEN_CLOSESIZE  */
+    TOKEN_CODE = 264,              /* TOKEN_CODE  */
+    TOKEN_CONF = 265,              /* TOKEN_CONF  */
+    TOKEN_ID = 266,                /* TOKEN_ID  */
+    TOKEN_FID = 267,               /* TOKEN_FID  */
+    TOKEN_FID_END = 268,           /* TOKEN_FID_END  */
+    TOKEN_LINE_INFO = 269,         /* TOKEN_LINE_INFO  */
+    TOKEN_REGEXP = 270,            /* TOKEN_REGEXP  */
+    TOKEN_BLOCK = 271              /* TOKEN_BLOCK  */
   };
+  typedef enum yytokentype yytoken_kind_t;
 #endif
 
 /* Value type.  */
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
-
 union YYSTYPE
 {
-#line 42 "../src/parse/parser.ypp" /* yacc.c:1913  */
+#line 33 "../src/parse/parser.ypp"
 
-    const re2c::AST * regexp;
-    re2c::Code * code;
-    char op;
-    re2c::ASTBounds bounds;
-    std::string * str;
-    re2c::CondList * clist;
+    const re2c::AST *regexp;
+    re2c::SemAct    *semact;
+    char             op;
+    re2c::ASTBounds  bounds;
+    std::string     *str;
+    re2c::CondList  *clist;
 
-#line 79 "src/parse/parser.h" /* yacc.c:1913  */
+#line 89 "src/parse/parser.h"
+
 };
-
 typedef union YYSTYPE YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define YYSTYPE_IS_DECLARED 1

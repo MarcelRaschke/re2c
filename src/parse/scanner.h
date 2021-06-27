@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "src/util/c99_stdint.h"
+#include <set>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,7 @@ public:
 
 private:
     std::vector<Input*> files;
+    std::set<std::string> filedeps;
     const conopt_t *globopts;
     loc_t location;
 
@@ -41,6 +43,7 @@ public:
     ~Scanner();
     bool open(const std::string &filename, const std::string *parent);
     bool include(const std::string &filename);
+    bool gen_dep_file() const;
     const loc_t &tok_loc() const;
     loc_t cur_loc() const;
     ParseMode echo(Output &out);
@@ -58,7 +61,7 @@ private:
     inline void set_line(uint32_t l);
     inline void next_line();
     void set_sourceline ();
-    void lex_end_of_comment(Output &out);
+    void lex_end_of_comment(Output &out, bool allow_garbage = false);
     void lex_code_indented();
     void lex_code_in_braces();
     void lex_c_comment();
@@ -76,6 +79,7 @@ private:
     void lex_conf_input(Opt &opts);
     void lex_conf_empty_class(Opt &opts);
     void lex_conf_enc(Enc::type_t enc, Opt &opts);
+    void lex_conf_api_style(Opt &opts);
     void lex_conf_assign();
     void lex_conf_semicolon();
     int32_t lex_conf_number();
@@ -85,6 +89,10 @@ private:
     bool is_eof() const;
     void fail_if_eof() const;
     uint32_t decode(const char *str) const;
+    void error_block_start(const char *block) const;
+    void error_named_block_start(const char *block) const;
+    void error_include_directive() const;
+    void error_header_directive() const;
 
     FORBID_COPY (Scanner);
 };
@@ -93,6 +101,7 @@ inline Scanner::Scanner(const conopt_t *o, Msg &m)
     : ScannerState()
     , msg(m)
     , files()
+    , filedeps()
     , globopts(o)
     , location(ATSTART)
 {}

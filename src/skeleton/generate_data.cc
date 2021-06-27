@@ -19,7 +19,6 @@
 #include "src/skeleton/skeleton.h"
 #include "src/util/forbid_copy.h"
 #include "src/util/u32lim.h"
-#include "src/util/wrap_iter.h"
 
 
 namespace re2c {
@@ -54,17 +53,17 @@ typedef u32lim_t<1024 * 1024 * 1024> cover_size_t; // ~1Gb
 
 struct cover_t
 {
-    FILE *input;
-    FILE *keys;
     std::vector<uint8_t> loops;
     std::vector<suffix_t> suffixes;
     path_t prefix;
     cover_size_t size;
 
-    cover_t(FILE *fi, FILE *fk, size_t nnodes):
-        input(fi), keys(fk), loops(nnodes),
-        suffixes(nnodes), prefix(0),
-        size(cover_size_t::from32(0u)) {}
+    cover_t(size_t nnodes)
+        : loops(nnodes)
+        , suffixes(nnodes)
+        , prefix(0)
+        , size(cover_size_t::from32(0u))
+        {}
 
     FORBID_COPY(cover_t);
 };
@@ -84,33 +83,36 @@ template<typename uintn_t> static uintn_t to_le(uintn_t n)
 //   - range bounds must be included
 //   - values should be evenly distributed
 //   - values should be deterministic
-static uint32_t step(uint32_t lower, uint32_t upper)
+static inline uint32_t step(uint32_t lower, uint32_t upper)
 {
     return 1 + (upper - lower) / 0x100;
 }
 
-static uint32_t nsteps(uint32_t lower, uint32_t upper)
+static inline uint32_t nsteps(uint32_t lower, uint32_t upper)
 {
     return 2 + (upper - lower - 1) / step(lower, upper);
 }
 
-static void apply(std::vector<size_t> *tags, const tcmd_t *cmd, size_t pos)
+static void apply(Skeleton &skel, const tcmd_t *cmd, uint32_t dist)
 {
+    uint32_t *tags = skel.tagvals;
+
     for (const tcmd_t *p = cmd; p; p = p->next) {
         const tagver_t l = p->lhs, r = p->rhs, *h = p->history;
-        std::vector<size_t> &t = tags[l];
         if (tcmd_t::iscopy(p)) {
-            t = tags[r];
+            tags[l] = tags[r];
         } else if (tcmd_t::isset(p)) {
-            t.clear();
-            t.push_back(*h == TAGVER_BOTTOM ? Skeleton::DEFTAG : pos);
+            tags[l] = *h == TAGVER_BOTTOM ? Skeleton::DEFTAG : dist;
         } else {
-            if (l != r) t = tags[r];
-            std::vector<size_t> x;
-            for (; *h != TAGVER_ZERO; ++h) {
-                x.push_back(*h == TAGVER_BOTTOM ? Skeleton::DEFTAG : pos);
+            if (l != r) tags[l] = tags[r];
+
+            uint32_t t = tags[l];
+            const tagver_t *h0 = h;
+            for (; *h != TAGVER_ZERO; ++h);
+            for (; h --> h0; ) {
+                t = mtag(skel.tagtrie, t, *h == TAGVER_BOTTOM ? Skeleton::DEFTAG : dist);
             }
-            t.insert(t.end(), x.rbegin(), x.rend());
+            tags[l] = t;
         }
     }
 }
@@ -122,10 +124,11 @@ static size_t path_width(const path_t &path, const Skeleton &skel)
 
         // width of multiarc: total number of characters picked from all ranges
         size_t w = 0;
-        const Node::arc_t &arc = path.arc(skel, i);
-        for (Node::citer_t a = arc.begin(); a != arc.end(); ++a) {
+        const Node::range_t *a0 = path.arc(skel, i), *a = a0;
+        do {
             w += nsteps(a->lower, a->upper);
-        }
+            a = a->next;
+        } while (a != a0);
 
         // width of multipath: maximal width of multiarc
         width = std::max(width, w);
@@ -134,130 +137,176 @@ static size_t path_width(const path_t &path, const Skeleton &skel)
 }
 
 template<typename cunit_t>
-static void write_input(const path_t &path, const Skeleton &skel,
-    size_t width, FILE *file)
+static void write_input(const path_t &path, Skeleton &skel, size_t width)
 {
-    const size_t
-        len = path.len(),
-        size = len * width;
-    cunit_t *buffer = new cunit_t[size];
+    const size_t len = path.len();
+    const size_t size = len * width;
 
-    // pick characters from ranges
+    grow_membuf(skel.arc_iters, len);
+    grow_membuf(skel.char_iters, len);
+    const Node::range_t **arcs = skel.arc_iters.ptr;
+    size_t *chars = skel.char_iters.ptr;
     for (size_t i = 0; i < len; ++i) {
-        Node::wciter_t a(path.arc(skel, i));
-        for (size_t w = 0; w < width; ++a) {
-            const uint32_t
-                l = a->lower,
-                u = a->upper,
-                d = step(l, u);
-            for (uint32_t m = l; m < u + d && w < width; m += d, ++w) {
-                buffer[w * len + i] = to_le(static_cast<cunit_t>(std::min(m, u)));
-            }
-        }
+        const Node::range_t *a = path.arc(skel, i);
+        arcs[i] = a;
+        chars[i] = a->lower;
     }
 
-    fwrite(buffer, sizeof(cunit_t), size, file);
+    cunit_t *p = skel.buf_data.alloc<cunit_t>(size);
 
-    delete[] buffer;
+    for (size_t w = 0; w < width; ++w) {
+        for (size_t i = 0; i < len; ++i) {
+            const Node::range_t *a = arcs[i];
+            const uint32_t upper = a->upper;
+            const uint32_t stride = step(a->lower, upper);
+            uint32_t c = static_cast<uint32_t>(chars[i]);
+
+            if (c >= upper) {
+                // the current range covered, start the next one
+                arcs[i] = a = a->next;
+                chars[i] = a->lower;
+            } else if (c >= upper - stride) {
+                // pick the last character in the current range
+                // (the last step may be shorter than stride, so round up to
+                // the upper bound, and avoid potential overflow on c + stride)
+                chars[i] = upper;
+            } else {
+                // step to the next character in the current range
+                chars[i] += stride;
+            }
+
+            *p++ = to_le(static_cast<cunit_t>(c));
+        }
+    }
 }
 
 template<typename key_t>
-static void write_keys(const path_t &path, const Skeleton &skel,
-    size_t width, FILE *file)
+static void write_keys(const path_t &path, Skeleton &skel, size_t width)
 {
+    const uint32_t offby = skel.opts->lookahead ? 0 : 1;
+
     // find last accepting node
     size_t f;
     for (f = path.len(); f > 0 && path.node(skel, f).rule == Rule::NONE; --f);
-
-    // calculate tags: start with default and apply commands step by step
-    const size_t
-        nver = skel.ntagver,
-        ntag = width * nver,
-        offby = skel.opts->lookahead ? 0 : 1;
-    std::vector<size_t> *tags = new std::vector<size_t>[ntag];
-
-    // initial tags (TDFA(0))
-    for (size_t w = 0; w < width; ++w) {
-        apply(&tags[w * nver], skel.cmd0, 0);
-    }
-    for (size_t i = 0; i < f; ++i) {
-        Node::wciter_t a(path.arc(skel, i));
-
-        // tags commands in state (staDFA), -1 because of "delayed store"
-        for (size_t w = 0; w < width; ++w) {
-            apply(&tags[w * nver], path.node(skel, i).stacmd, i - 1);
-        }
-
-        // tag commands on transitions (TDFA(0), TDFA(1))
-        for (size_t w = 0; w < width; ++a) {
-            uint32_t n = nsteps(a->lower, a->upper);
-            for (; n --> 0 && w < width; ++w) {
-                apply(&tags[w * nver], a->cmd, i + offby);
-            }
-        }
-    }
-    // tag commands in final states
-    const tcmd_t *fcmd = path.node(skel, f).cmd;
-    for (size_t w = 0; w < width; ++w) {
-
-        // staDFA, -1 because of "delayed store"
-        apply(&tags[w * nver], path.node(skel, f).stacmd, f - 1);
-
-        // TDFA(1)
-        apply(&tags[w * nver], fcmd, f);
-    }
-
     const size_t rule = path.node(skel, f).rule;
-    size_t matched = 0, ltag = 0, htag = 0, trail = 0;
-    if (rule != Rule::NONE) {
 
+    size_t ltag = 0, htag = 0, trail = 0;
+    if (rule != Rule::NONE) {
         const Rule &r = skel.rules[rule];
         ltag = r.ltag;
         htag = r.htag;
         trail = r.ttag;
+    }
 
-        // matched length might depend on tag values
-        if (trail == htag) {
-            matched = f;
-        } else {
-            DASSERT(!fixed(skel.tags[trail])); // no fixed trailing context
-            matched = tags[skel.finvers[trail]].back();
+    const Node::range_t **arcs = NULL;
+    size_t *chars = NULL;
+    uint32_t *tags = skel.tagvals;
+    mtag_trie_t &tagtrie = skel.tagtrie;
+
+    if (ltag < htag) {
+        // init arc iterators and character iterators within each arc
+        grow_membuf(skel.arc_iters, f);
+        grow_membuf(skel.char_iters, f);
+        arcs = skel.arc_iters.ptr;
+        chars = skel.char_iters.ptr;
+        for (size_t i = 0; i < f; ++i) {
+            const Node::range_t *a = path.arc(skel, i);
+            arcs[i] = a;
+            chars[i] = nsteps(a->lower, a->upper);
+        }
+    }
+
+    // process each subpath of the multipath separately (rather than iterate
+    // on all subpaths in lockstep) to reduce the size of storage used for
+    // intermediate tag values
+    for (size_t w = 0; w < width; ++w) {
+        if (ltag < htag) {
+            // clear buffers for tag values
+            std::fill(tags, tags + skel.ntagver, MTAG_TRIE_ROOT);
+            mtag_trie_clear(tagtrie);
+
+            // initial tags (TDFA(0))
+            apply(skel, skel.cmd0, 0);
+
+            for (uint32_t i = 0; i < f; ++i) {
+                // tags commands in state (staDFA), -1 because of "delayed store"
+                apply(skel, path.node(skel, i).stacmd, i - 1);
+
+                // tag commands on transitions (TDFA(0), TDFA(1))
+                const Node::range_t *a = arcs[i];
+                apply(skel, a->cmd, i + offby);
+
+                // advance character iterator
+                // if it's the last one, then switch to the next arc
+                if (--chars[i] == 0) {
+                    arcs[i] = a = a->next;
+                    chars[i] = nsteps(a->lower, a->upper);
+                }
+            }
+
+            // tag commands in final states
+            const tcmd_t *fcmd = path.node(skel, f).cmd;
+
+            // staDFA, -1 because of "delayed store"
+            apply(skel, path.node(skel, f).stacmd, static_cast<uint32_t>(f) - 1);
+
+            // TDFA(1)
+            apply(skel, fcmd, static_cast<uint32_t>(f));
+        }
+
+        size_t matched = 0;
+        if (rule != Rule::NONE) {
+            if (trail == htag) {
+                // no trailing context
+                matched = f;
+            } else {
+                // trailing context must be an s-tag, not an m-tag
+                const Tag &tag = skel.tags[trail];
+                if (!fixed(tag)) {
+                    // variable-length trailing context
+                    matched = tags[skel.finvers[trail]];
+                } else if (tag.base != Tag::RIGHTMOST) {
+                    // fixed-length trailing context based on tag
+                    matched = tags[skel.finvers[tag.base]] - tag.dist;
+                } else {
+                    // fixed-length trailing context based on cursor
+                    matched = f - tag.dist;
+                }
+            }
             DASSERT(matched != Skeleton::DEFTAG);
         }
-    }
 
-    // count keys
-    size_t nkey = 0;
-    for (size_t w = 0; w < width; ++w) {
-        nkey += 3;
+        // count keys
+        size_t nkey = 3;
         for (size_t t = ltag; t < htag; ++t) {
             const Tag &tag = skel.tags[t];
             if (t == trail || fictive(tag)) continue;
             const size_t
                 base = fixed(tag) ? tag.base : t,
                 bver = static_cast<size_t>(skel.finvers[base]);
-            if (history(tag)) nkey += tags[w * nver + bver].size();
+            if (history(tag)) {
+                nkey += mtag_length(tagtrie, tags[bver]);
+            }
             ++nkey;
         }
-    }
 
-    // keys: 1 - scanned length, 2 - matched length, 3 - matched rule, the rest - tags
-    key_t *keys = new key_t[nkey], *k = keys;
-    for (size_t w = 0; w < width; ++w) {
+        key_t *k = skel.buf_keys.alloc<key_t>(nkey);
+
+        // keys: 1 - scanned length, 2 - matched length, 3 - matched rule, the rest - tags
         *k++ = to_le(static_cast<key_t>(path.len()));
         *k++ = to_le(static_cast<key_t>(matched));
-        *k++ = to_le(rule2key<key_t>(rule, skel.defrule));
+        *k++ = to_le(rule2key<key_t>(rule, skel.def_rule));
 
         for (size_t t = ltag; t < htag; ++t) {
             const Tag &tag = skel.tags[t];
             if (t == trail || fictive(tag)) continue;
 
-            const size_t
-                base = fixed(tag) ? tag.base : t,
-                bver = static_cast<size_t>(skel.finvers[base]);
-            const std::vector<size_t> &h = tags[w * nver + bver];
             if (history(tag)) {
-                const size_t hlen = h.size();
+                DASSERT(!fixed(tag));
+                // variable-length tag
+                const size_t tver = static_cast<size_t>(skel.finvers[t]);
+                uint32_t tval = tags[tver];
+                const uint32_t len = mtag_length(tagtrie, tval);
 
                 // Abort if history length exceeds maximum value of key type.
                 // This is not always true, but it is difficult to estimate
@@ -267,27 +316,44 @@ static void write_keys(const path_t &path, const Skeleton &skel,
                 // TODO: Ideally we should use different encoding for the keys
                 // (structs with 2 or 4 byte fields for history length and
                 // proper serialization/deserialization instead of flat arrays).
-                DASSERT(hlen < std::numeric_limits<key_t>::max());
+                DASSERT(len < std::numeric_limits<key_t>::max());
 
-                *k++ = to_le(static_cast<key_t>(hlen));
-                for (size_t i = 0; i < hlen; ++i) {
-                    *k++ = to_le(static_cast<key_t>(h[i]));
+                // unfold m-tag history from the tag trie (from tail to head)
+                std::vector<uint32_t> &history = skel.mtagval;
+                history.clear();
+                for (; tval != MTAG_TRIE_ROOT; ) {
+                    const mtag_t &mt = tagtrie.head[tval];
+                    history.push_back(mt.dist);
+                    tval = mt.pred;
+                }
+
+                *k++ = to_le(static_cast<key_t>(len));
+                for (uint32_t i = len; i --> 0; ) {
+                    *k++ = to_le(static_cast<key_t>(history[i]));
                 }
             } else {
-                *k++ = to_le(static_cast<key_t>(h.back()));
+                size_t tval;
+                if (!fixed(tag)) {
+                    // variable-length tag
+                    const size_t tver = static_cast<size_t>(skel.finvers[t]);
+                    tval = tags[tver];
+                } else if (tag.base != Tag::RIGHTMOST) {
+                    // fixed-length tag based on another tag
+                    const size_t tver = static_cast<size_t>(skel.finvers[tag.base]);
+                    tval = tags[tver];
+                    if (tval != Skeleton::DEFTAG) tval -= tag.dist;
+                } else {
+                    // fixed-length tag based on cursor
+                    tval = matched - tag.dist;
+                }
+                *k++ = to_le(static_cast<key_t>(tval));
             }
         }
     }
-
-    // dump to file
-    fwrite(keys, sizeof(key_t), nkey, file);
-
-    delete[] tags;
-    delete[] keys;
 }
 
 template<typename cunit_t, typename key_t>
-static cover_size_t cover_one(const Skeleton &skel, cover_t &cover)
+static cover_size_t cover_one(Skeleton &skel, cover_t &cover)
 {
     const path_t &path = cover.prefix;
 
@@ -298,8 +364,8 @@ static cover_size_t cover_one(const Skeleton &skel, cover_t &cover)
         * cover_size_t::from64(width);
 
     if (!size.overflow()) {
-        write_input<cunit_t>(path, skel, width, cover.input);
-        write_keys<key_t>(path, skel, width, cover.keys);
+        write_input<cunit_t>(path, skel, width);
+        write_keys<key_t>(path, skel, width);
     }
 
     return size;
@@ -334,10 +400,8 @@ static cover_size_t cover_one(const Skeleton &skel, cover_t &cover)
  * See also note [counting skeleton edges].
  *
  */
-template <typename cunit_t, typename key_t> static void gencover(
-    const Skeleton &skel,
-    cover_t &cover,
-    size_t i)
+template <typename cunit_t, typename key_t> static void gencover(Skeleton &skel,
+    cover_t &cover, size_t i)
 {
     const Node &node = skel.nodes[i];
     uint8_t &loop = cover.loops[i];
@@ -394,7 +458,7 @@ template <typename cunit_t, typename key_t> static void gencover(
 }
 
 template<typename cunit_t, typename key_t>
-    static void generate_paths_cunit_key(const Skeleton &skel, cover_t &cover)
+    static void generate_paths_cunit_key(Skeleton &skel, cover_t &cover)
 {
     gencover<cunit_t, key_t>(skel, cover, 0);
     if (cover.size.overflow()) {
@@ -402,10 +466,12 @@ template<typename cunit_t, typename key_t>
             "DFA %sis too large: can only generate partial path cover",
             incond(skel.cond).c_str());
     }
+    skel.buf_data.flush<cunit_t>();
+    skel.buf_keys.flush<key_t>();
 }
 
 template<typename cunit_t>
-    static void generate_paths_cunit(const Skeleton &skel, cover_t &cover)
+    static void generate_paths_cunit(Skeleton &skel, cover_t &cover)
 {
     switch (skel.sizeof_key) {
         case 8: generate_paths_cunit_key<cunit_t, uint64_t>(skel, cover); break;
@@ -415,7 +481,7 @@ template<typename cunit_t>
     }
 }
 
-static void generate_paths(const Skeleton &skel, cover_t &cover)
+static void generate_paths(Skeleton &skel, cover_t &cover)
 {
     switch (skel.opts->encoding.szCodeUnit()) {
         case 4: generate_paths_cunit<uint32_t>(skel, cover); break;
@@ -424,7 +490,7 @@ static void generate_paths(const Skeleton &skel, cover_t &cover)
     }
 }
 
-void emit_data(const Skeleton &skel)
+void emit_data(Skeleton &skel)
 {
     std::string fname = skel.opts->output_file;
     if (fname.empty()) {
@@ -432,17 +498,30 @@ void emit_data(const Skeleton &skel)
     }
 
     const std::string input_name = fname + "." + skel.name + ".input";
+    const std::string keys_name = std::string(fname) + "." + skel.name + ".keys";
+    // For existing files 'remove() / fopen("w")' works faster than 'fopen("w")'
+    // at least on ext4. Slowdown happens due to 'auto_da_alloc' heuristic that
+    // forces data and metadata commit on open(O_TRUNC) for non-empty files:
+    //   https://www.kernel.org/doc/html/latest/admin-guide/ext4.html
+    // Presence of 'remove()' avoids it.
+    remove(input_name.c_str());
+    remove(keys_name.c_str());
+
     FILE *input = fopen(input_name.c_str(), "wb");
     if (!input) {
-        fatal("cannot open file: %s", input_name.c_str());
+        error("cannot open file: %s", input_name.c_str());
+        exit(1);
     }
-    const std::string keys_name = std::string(fname) + "." + skel.name + ".keys";
     FILE *keys = fopen (keys_name.c_str(), "wb");
     if (!keys) {
-        fatal("cannot open file: %s", keys_name.c_str());
+        error("cannot open file: %s", keys_name.c_str());
+        exit(1);
     }
 
-    cover_t cover(input, keys, skel.nodes_count);
+    skel.buf_data.file = input;
+    skel.buf_keys.file = keys;
+
+    cover_t cover(skel.nodes_count);
     generate_paths(skel, cover);
 
     fclose(input);

@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "src/adfa/adfa.h"
-#include "src/codegen/go.h"
+#include "src/codegen/code.h"
 #include "src/debug/debug.h"
 #include "src/dfa/dfa.h"
 #include "src/options/opt.h"
@@ -17,8 +17,6 @@ namespace re2c {
 
 class Msg;
 
-const size_t Initial::NOSAVE = std::numeric_limits<size_t>::max();
-
 static bool is_eof(const opt_t *opts, uint32_t ub)
 {
     return opts->eof != NOEOF && static_cast<uint32_t>(opts->eof) == ub;
@@ -27,13 +25,11 @@ static bool is_eof(const opt_t *opts, uint32_t ub)
 DFA::DFA
     ( const dfa_t &dfa
     , const std::vector<size_t> &fill
-    , size_t def
     , size_t key
     , const loc_t &loc
     , const std::string &nm
     , const std::string &cn
     , const std::string &su
-    , const Code *eof
     , const opt_t *opts
     , Msg &msg
     )
@@ -46,12 +42,17 @@ DFA::DFA
     , nStates(0)
     , head(NULL)
     , defstate(NULL)
+    , eof_state(NULL)
     , finstates(dfa.rules.size(), NULL)
     , tags0(dfa.tcid0)
     , charset(dfa.charset)
     , rules(dfa.rules)
     , tags(dfa.tags)
     , mtagvers(dfa.mtagvers)
+    , stagnames()
+    , stagvars()
+    , mtagnames()
+    , mtagvars()
     , finvers(dfa.finvers)
     , tcpool(dfa.tcpool)
     , max_fill (0)
@@ -60,12 +61,14 @@ DFA::DFA
     , need_accept (false)
     , oldstyle_ctxmarker (false)
     , maxtagver (dfa.maxtagver)
-    , def_rule (def)
+    , def_rule(dfa.def_rule)
+    , eof_rule(dfa.eof_rule)
     , key_size (key)
-    , bitmaps (std::min(ubChar, 256u))
+    , bitmap(NULL)
     , setup(su)
-    , eof_action(eof)
     , msg(msg)
+    , start_label(NULL)
+    , initial_label(NULL)
 {
     const size_t nstates = dfa.states.size();
     const size_t nchars = dfa.nchars;
@@ -113,7 +116,7 @@ DFA::DFA
             s->go.span[j].ub = charset[c];
             s->go.span[j].tags = tc;
         }
-        s->go.nSpans = j;
+        s->go.nspans = j;
     }
     *p = NULL;
 
@@ -172,7 +175,7 @@ void DFA::reorder()
         State *s = todo.front();
         todo.pop();
         ord.push_back(s);
-        for(uint32_t i = 0; i < s->go.nSpans; ++i)
+        for(uint32_t i = 0; i < s->go.nspans; ++i)
         {
             State *q = s->go.span[i].to;
             if(q && done.insert(q).second)

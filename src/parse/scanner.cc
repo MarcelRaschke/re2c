@@ -7,6 +7,7 @@
 #include "src/msg/msg.h"
 #include "src/parse/scanner.h"
 #include "src/debug/debug.h"
+#include "src/util/file_utils.h"
 
 
 namespace re2c {
@@ -41,6 +42,7 @@ bool Scanner::open(const std::string &filename, const std::string *parent)
     if (!in->open(filename, parent, globopts->incpaths)) {
         return false;
     }
+    filedeps.insert(in->escaped_name);
     msg.filenames.push_back(in->escaped_name);
     return true;
 }
@@ -48,8 +50,9 @@ bool Scanner::open(const std::string &filename, const std::string *parent)
 bool Scanner::include(const std::string &filename)
 {
     // get name of the current file (before unreading)
-    DASSERT(!files.empty());
-    const std::string &parent = files.back()->escaped_name;
+    const size_t fidx = get_input_index();
+    DASSERT(fidx < files.size());
+    const std::string &parent = files[fidx]->escaped_name;
 
     // unread buffer tail: we'll return to it later
     // In the buffer nested files go before outer files. In the file stack,
@@ -152,22 +155,48 @@ bool Scanner::fill(size_t need)
     else {
         BSIZE += std::max(BSIZE, need);
         char * buf = new char[BSIZE + YYMAXFILL];
-        if (!buf) fatal("out of memory");
+        if (!buf) {
+            error("out of memory");
+            exit(1);
+        }
 
         memmove(buf, tok, copy);
-        shift_ptrs_and_fpos(buf - bot);
+        shift_ptrs_and_fpos(buf - tok);
         delete [] bot;
         bot = buf;
 
         free = BSIZE - copy;
     }
 
+    DASSERT(lim + free <= bot + BSIZE);
     if (!read(free)) {
         eof = lim;
         memset(lim, 0, YYMAXFILL);
         lim += YYMAXFILL;
     }
 
+    return true;
+}
+
+bool Scanner::gen_dep_file() const
+{
+    const std::string &fname = globopts->dep_file;
+    if (fname.empty()) return true;
+
+    FILE *file = fopen(fname.c_str(), "w");
+    if (file == NULL) {
+        error("cannot open dep file %s", fname.c_str());
+        return false;
+    }
+
+    fprintf(file, "%s:", escape_backslashes(globopts->output_file).c_str());
+    for (std::set<std::string>::const_iterator i = filedeps.begin();
+        i != filedeps.end(); ++i) {
+        fprintf(file, " %s", i->c_str());
+    }
+    fprintf(file, "\n");
+
+    fclose(file);
     return true;
 }
 

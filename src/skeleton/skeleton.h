@@ -11,17 +11,19 @@
 #include <valarray>
 #include <vector>
 
+#include "src/codegen/code.h"
 #include "src/msg/location.h"
 #include "src/regexp/rule.h"
 #include "src/regexp/tag.h"
+#include "src/skeleton/mtag_trie.h"
+#include "src/util/allocate.h"
 #include "src/util/forbid_copy.h"
 #include "src/util/local_increment.h"
-#include "src/util/wrap_iter.h"
+#include "src/util/fixed_allocator.h"
 
 
 namespace re2c {
 
-class Output;
 class path_t;
 struct DFA;
 struct dfa_state_t;
@@ -31,6 +33,77 @@ class bitmaps_t;
 struct opt_t;
 struct tcmd_t;
 
+struct OutBuf {
+    FILE *file;
+    size_t size;
+    union {
+        membuf_t<uint8_t>  buf8;
+        membuf_t<uint16_t> buf16;
+        membuf_t<uint32_t> buf32;
+        membuf_t<uint64_t> buf64;
+    };
+
+    void init(size_t selector);
+    void free(size_t selector);
+    template<typename T> membuf_t<T>& select();
+    template<typename T> T* alloc(size_t n);
+    template<typename T> void flush();
+};
+
+template<> inline membuf_t<uint8_t>&  OutBuf::select() { return buf8;  }
+template<> inline membuf_t<uint16_t>& OutBuf::select() { return buf16; }
+template<> inline membuf_t<uint32_t>& OutBuf::select() { return buf32; }
+template<> inline membuf_t<uint64_t>& OutBuf::select() { return buf64; }
+
+inline void OutBuf::init(size_t selector)
+{
+    static const size_t KB = 1024 * 1024;
+    switch (selector) {
+        case 1: init_membuf(buf8, KB);  break;
+        case 2: init_membuf(buf16, KB); break;
+        case 4: init_membuf(buf32, KB); break;
+        case 8: init_membuf(buf64, KB); break;
+        default: DASSERT(false);
+    }
+    size = 0;
+    file = NULL;
+}
+
+inline void OutBuf::free(size_t selector)
+{
+    switch (selector) {
+        case 1: free_membuf(buf8);  break;
+        case 2: free_membuf(buf16); break;
+        case 4: free_membuf(buf32); break;
+        case 8: free_membuf(buf64); break;
+        default: DASSERT(false);
+    }
+    size = 0;
+}
+
+template<typename T> inline void OutBuf::flush()
+{
+    membuf_t<T> &buf = select<T>();
+    fwrite(buf.ptr, sizeof(T), size, file);
+    size = 0;
+}
+
+template<typename T> inline T* OutBuf::alloc(size_t n)
+{
+    membuf_t<T> &buf = select<T>();
+
+    if (size + n >= buf.size) {
+        flush<T>();
+        grow_membuf(buf, n);
+        size = 0;
+    }
+
+    T *ptr = buf.ptr + size;
+    size += n;
+
+    return ptr;
+}
+
 typedef local_increment_t<uint8_t> local_inc;
 
 struct Node
@@ -39,16 +112,11 @@ struct Node
         uint32_t lower;
         uint32_t upper;
         const tcmd_t *cmd;
-
-        range_t(): lower(0), upper(0), cmd(NULL) {}
-        range_t(uint32_t l, uint32_t u, const tcmd_t *c)
-            : lower(l), upper(u), cmd(c) {}
+        range_t *next;
     };
 
-    typedef std::vector<range_t> arc_t;
-    typedef std::map<size_t, arc_t> arcs_t;
-    typedef arc_t::const_iterator citer_t;
-    typedef wrap_citer_t<arc_t> wciter_t;
+    typedef std::map<size_t, range_t*> arcs_t;
+    typedef fixed_allocator_t<Node::range_t> range_allocator_t;
 
     arcs_t arcs;
     size_t rule;
@@ -56,8 +124,8 @@ struct Node
     const tcmd_t *stacmd;
 
     Node();
-    void init(const dfa_state_t *s,
-        const std::vector<uint32_t> &charset, size_t nil);
+    void init(const dfa_state_t *s, const std::vector<uint32_t> &charset,
+        size_t nil, range_allocator_t &allocator);
     bool end() const;
 
     FORBID_COPY(Node);
@@ -65,7 +133,7 @@ struct Node
 
 struct Skeleton
 {
-    static const size_t DEFTAG;
+    static const uint32_t DEFTAG;
 
     const opt_t *opts;
     const std::string name;
@@ -73,21 +141,31 @@ struct Skeleton
     const loc_t loc;
     Msg &msg;
 
+    Node::range_allocator_t range_allocator;
+
     const size_t nodes_count;
     Node *nodes;
     const tcmd_t *cmd0;
 
     size_t sizeof_key;
-    size_t defrule;
+    size_t def_rule;
+    size_t eof_rule;
     size_t ntagver;
     const std::vector<uint32_t> &charset;
     const std::valarray<Rule> &rules;
     const std::vector<Tag> &tags;
     const tagver_t *finvers;
 
-    Skeleton(const dfa_t &dfa, const opt_t *op, size_t def
-        , const std::string &dfa_name, const std::string &dfa_cond
-        , const loc_t &loc, Msg &msg);
+    uint32_t *tagvals;
+    mtag_trie_t tagtrie;
+    std::vector<uint32_t> mtagval;
+    membuf_t<const Node::range_t*> arc_iters;
+    membuf_t<size_t> char_iters;
+    OutBuf buf_data;
+    OutBuf buf_keys;
+
+    Skeleton(const dfa_t &dfa, const opt_t *opts, const std::string &name,
+        const std::string &cond, const loc_t &loc, Msg &msg);
     ~Skeleton ();
     FORBID_COPY(Skeleton);
 };
@@ -108,17 +186,11 @@ uint64_t rule2key(size_t rule, size_t key, size_t def);
 uint32_t maxpath(const Skeleton &skel);
 void warn_undefined_control_flow(const Skeleton &skel);
 void fprint_default_path(FILE *f, const Skeleton &skel, const path_t &p);
-void emit_data(const Skeleton &skel);
-void emit_prolog(Output & o);
-void emit_start(Output &o, size_t maxfill, size_t maxnmatch, const std::string &name,
-    size_t sizeof_key, size_t def, bool backup, bool accept, bool oldstyle_ctxmarker,
-    const std::set<std::string> &stagnames, const std::set<std::string> &stagvars,
-    const std::set<std::string> &mtagnames, const std::set<std::string> &mtagvars,
-    bitmaps_t &bitmaps);
-void emit_end(Output &o, const std::string &name, bool backup, bool oldstyle_ctxmarker,
-    const std::set<std::string> &mtagnames);
-void emit_epilog(Output &o, const std::set<std::string> &names);
-void emit_action(Output &o, uint32_t ind, const DFA &dfa, size_t rid);
+void emit_data(Skeleton &skel);
+Code *emit_skeleton_prolog(Output &output);
+Code *emit_skeleton_epilog(Output &output);
+void emit_skeleton(Output &output, CodeList *code, DFA &dfa);
+void emit_skeleton_action(Output &output, CodeList *code, const DFA &dfa, size_t rid);
 
 } // namespace re2c
 

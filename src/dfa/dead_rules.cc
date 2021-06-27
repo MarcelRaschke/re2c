@@ -67,7 +67,6 @@ struct tcmd_t;
  * them here and save for future use.
  */
 
-
 // reversed DFA
 struct rdfa_t
 {
@@ -129,7 +128,6 @@ struct rdfa_t
     FORBID_COPY(rdfa_t);
 };
 
-
 static void backprop(const rdfa_t &rdfa, bool *live,
     size_t rule, size_t state)
 {
@@ -152,7 +150,6 @@ static void backprop(const rdfa_t &rdfa, bool *live,
     }
 }
 
-
 static void liveness_analyses(const rdfa_t &rdfa, bool *live)
 {
     for (size_t i = 0; i < rdfa.nstates; ++i) {
@@ -163,9 +160,8 @@ static void liveness_analyses(const rdfa_t &rdfa, bool *live)
     }
 }
 
-
-static void warn_dead_rules(const dfa_t &dfa, size_t defrule,
-    const std::string &cond, const bool *live, Msg &msg)
+static void warn_dead_rules(const dfa_t &dfa, const std::string &cond,
+    const bool *live, Msg &msg)
 {
     const size_t nstates = dfa.states.size();
     const size_t nrules = dfa.rules.size();
@@ -176,7 +172,7 @@ static void warn_dead_rules(const dfa_t &dfa, size_t defrule,
             // skip last rule (it's the NONE-rule)
             for (size_t j = 0; j < nrules; ++j) {
                 if (live[j * nstates + i]) {
-                    dfa.rules[r].shadow.insert(dfa.rules[j].code->loc.line);
+                    dfa.rules[r].shadow.insert(dfa.rules[j].semact->loc.line);
                 }
             }
         }
@@ -184,12 +180,11 @@ static void warn_dead_rules(const dfa_t &dfa, size_t defrule,
 
     for (size_t i = 0; i < nrules; ++i) {
         // default rule '*' should not be reported
-        if (i != defrule && !live[i * nstates]) {
+        if (i != dfa.def_rule && !live[i * nstates]) {
             msg.warn.unreachable_rule(cond, dfa.rules[i]);
         }
     }
 }
-
 
 static void warn_sentinel_in_midrule(const dfa_t &dfa, const opt_t *opts
     , const std::string &cond, const bool *live, Msg &msg)
@@ -207,7 +202,8 @@ static void warn_sentinel_in_midrule(const dfa_t &dfa, const opt_t *opts
     const uint32_t sentsym = opts->sentinel == NOEOF ? 0 : opts->sentinel;
     uint32_t sentcls = 0;
     DASSERT(dfa.charset.size() == nsym + 1);
-    for (; sentcls < nsym && sentsym >= dfa.charset[sentcls + 1]; ++sentcls);
+    for (; sentcls < nsym && sentsym >= dfa.charset[sentcls + 1]; ++sentcls)
+        ;
     DASSERT(sentcls < nsym);
 
     // check that every transition on sentinel symbol goes to an end state
@@ -230,14 +226,12 @@ static void warn_sentinel_in_midrule(const dfa_t &dfa, const opt_t *opts
 
     for (size_t r = 0; r < nrules; ++r) {
         if (bad[r]) {
-            msg.warn.sentinel_in_midrule(dfa.rules[r].code->loc
-                , cond, opts->sentinel);
+            msg.warn.sentinel_in_midrule(dfa.rules[r].semact->loc, cond, opts->sentinel);
         }
     }
 
     delete[] bad;
 }
-
 
 static void remove_dead_final_states(dfa_t &dfa, const bool *fallthru)
 {
@@ -267,55 +261,89 @@ static void remove_dead_final_states(dfa_t &dfa, const bool *fallthru)
     }
 }
 
-
 static void find_fallback_states(dfa_t &dfa, const bool *fallthru)
 {
-    const size_t
-        nstate = dfa.states.size(),
-        nsym = dfa.nchars;
+    const size_t nstate = dfa.states.size();
+    const size_t nsym = dfa.nchars;
 
     for (size_t i = 0; i < nstate; ++i) {
         dfa_state_t *s = dfa.states[i];
-
         s->fallthru = fallthru[i];
+        if (s->rule == Rule::NONE) continue;
 
-        if (s->rule != Rule::NONE) {
-            for (size_t c = 0; c < nsym; ++c) {
-                const size_t j = s->arcs[c];
-                if (j != dfa_t::NIL && fallthru[j]) {
-                    s->fallback = true;
-                    break;
-                }
+        // A final state is a fallback state if there are non-accepting paths
+        // from it (i.e. paths that end with a transition to default state).
+        for (size_t c = 0; c < nsym; ++c) {
+            const size_t j = s->arcs[c];
+            if (j != dfa_t::NIL && fallthru[j]) {
+                s->fallback = true;
+                break;
             }
         }
     }
 }
 
-
-void cutoff_dead_rules(dfa_t &dfa, const opt_t *opts, size_t defrule
-    , const std::string &cond, Msg &msg)
+static void find_fallback_states_with_eof_rule(dfa_t &dfa)
 {
-    const rdfa_t rdfa(dfa);
-    const size_t
-        ns = rdfa.nstates,
-        nl = (rdfa.nrules + 1) * ns;
-    bool *live = new bool[nl],
-        *fallthru = live + nl - ns;
-    memset(live, 0, nl * sizeof(bool));
+    const size_t nstate = dfa.states.size();
+    const size_t nsym = dfa.nchars;
 
-    liveness_analyses(rdfa, live);
-    if (opts->eof == NOEOF) {
-        // With EOF rule, there is always a possibility that EOF occurs before
-        // the next matching rule. In essence, sentinel is a special symbol
-        // which is not matched by any of the rules, so none of the rules can
-        // be completely shadowed by other rules.
-        warn_dead_rules(dfa, defrule, cond, live, msg);
-        remove_dead_final_states(dfa, fallthru);
+    for (size_t i = 0; i < nstate; ++i) {
+        dfa_state_t *s = dfa.states[i];
+        if (s->rule == Rule::NONE || s->rule == dfa.eof_rule) continue;
+
+        // With EOF rule, a final state is a fallback state if it has outgoing
+        // transitions to any non-accepting states (even if all possible paths
+        // on those transitions are accepting, there is a possibility of YYFILL
+        // failure on such path, which adds a default quasi-transition).
+        for (size_t c = 0; c < nsym; ++c) {
+            const size_t j = s->arcs[c];
+            if (j != dfa_t::NIL && dfa.states[j]->rule == Rule::NONE) {
+                s->fallback = true;
+                break;
+            }
+        }
     }
-    warn_sentinel_in_midrule(dfa, opts, cond, live, msg);
-    find_fallback_states(dfa, fallthru);
+}
 
-    delete[] live;
+static void remove_dead_final_states_with_eof_rule(dfa_t &dfa)
+{
+    // EOF is like a special symbol that is not covered by any of the rules.
+    // Therefore rules cannot be completely shadowed by other rules, with one
+    // exception: if a rule matches empty string and the initial state is not a
+    // fallback state (i.e. all outgoing paths are accepting), then this rule
+    // will never match (if it is EOF in the initial state, then EOF rule takes
+    // priority, otherwise one of the longer rules will match).
+    DASSERT(!dfa.states.empty());
+    dfa_state_t *s0 = dfa.states[0];
+    if (s0->rule != Rule::NONE && s0->rule != dfa.eof_rule && !s0->fallback) {
+        s0->rule = dfa.eof_rule;
+    }
+}
+
+void cutoff_dead_rules(dfa_t &dfa, const opt_t *opts, const std::string &cond, Msg &msg)
+{
+    if (opts->eof != NOEOF) {
+        // See note [EOF rule handling].
+        find_fallback_states_with_eof_rule(dfa);
+        remove_dead_final_states_with_eof_rule(dfa);
+    } else {
+        const rdfa_t rdfa(dfa);
+        const size_t ns = rdfa.nstates;
+        const size_t nl = (rdfa.nrules + 1) * ns;
+        bool *live = new bool[nl];
+        bool *fallthru = live + nl - ns;
+        memset(live, 0, nl * sizeof(bool));
+
+        liveness_analyses(rdfa, live);
+
+        warn_dead_rules(dfa, cond, live, msg);
+        remove_dead_final_states(dfa, fallthru);
+        warn_sentinel_in_midrule(dfa, opts, cond, live, msg);
+        find_fallback_states(dfa, fallthru);
+
+        delete[] live;
+    }
 }
 
 } // namespace re2c

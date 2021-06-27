@@ -3,7 +3,6 @@
 #include <string>
 #include <vector>
 
-#include "src/codegen/input_api.h"
 #include "src/dfa/dfa.h"
 #include "src/encoding/enc.h"
 #include "src/msg/location.h"
@@ -19,6 +18,17 @@ static inline bool next (char * & arg, char ** & argv)
 {
     arg = *++argv;
     return arg != NULL;
+}
+
+static inline bool set_source_file(conopt_t &globopts, const char *source)
+{
+    if (!globopts.source_file.empty()) {
+        error("multiple source files: %s, %s", globopts.source_file.c_str(), source);
+        return false;
+    } else {
+        globopts.source_file = source;
+        return true;
+    }
 }
 
 parse_opts_t parse_opts(char **argv, conopt_t &globopts, Opt &opts, Msg &msg)
@@ -59,14 +69,14 @@ opt:
     "--" end {
         // remaining args are non-options, so they must be input files
         // re2c expects exactly one input file
-        for (char * f; next (f, argv);) {
-            if (!opts.source (f)) return EXIT_FAIL;
+        for (char *f; next(f, argv); ) {
+            if (!set_source_file(globopts, f)) return EXIT_FAIL;
         }
         goto end;
     }
 
-    "-"      end { if (!opts.source ("<stdin>")) return EXIT_FAIL; goto opt; }
-    filename end { if (!opts.source (*argv))     return EXIT_FAIL; goto opt; }
+    "-"      end { if (!set_source_file(globopts, "<stdin>")) return EXIT_FAIL; goto opt; }
+    filename end { if (!set_source_file(globopts, *argv))     return EXIT_FAIL; goto opt; }
 
     "-"  { goto opt_short; }
     "--" { goto opt_long; }
@@ -107,7 +117,6 @@ opt_short:
     "D" { globopts.target = TARGET_DOT;      goto opt_short; }
     "f" { globopts.fFlag = true;             goto opt_short; }
     "F" { globopts.FFlag = true;             goto opt_short; }
-    "r" { globopts.rFlag = true;             goto opt_short; }
     "S" { globopts.target = TARGET_SKELETON; goto opt_short; }
 
     "b" { opts.set_bFlag(true);           goto opt_short; }
@@ -137,7 +146,9 @@ opt_short:
     "t" end { NEXT_ARG("-t, --type-header", opt_header); }
     "t"     { *argv = YYCURSOR; goto opt_header; }
 
-    "1" { goto opt_short; } // deprecated
+    // deprecated
+    "1" { goto opt_short; }
+    "r" { goto opt_short; }
 */
 
 opt_long:
@@ -152,7 +163,6 @@ opt_long:
     "emit-dot"              end { globopts.target = TARGET_DOT;      goto opt; }
     "storable-state"        end { globopts.fFlag = true;             goto opt; }
     "flex-syntax"           end { globopts.FFlag = true;             goto opt; }
-    "reusable"              end { globopts.rFlag = true;             goto opt; }
     "verbose"               end { globopts.verbose = true;           goto opt; }
     "no-generation-date"    end { globopts.bNoGenerationDate = true; goto opt; }
     "no-version"            end { globopts.version = false;          goto opt; }
@@ -160,6 +170,7 @@ opt_long:
 
     "bit-vectors"           end { opts.set_bFlag (true);             goto opt; }
     "debug-output"          end { opts.set_dFlag (true);             goto opt; }
+    "case-ranges"           end { opts.set_case_ranges (true);       goto opt; }
     "computed-gotos"        end { opts.set_gFlag (true);             goto opt; }
     "no-debug-info"         end { opts.set_iFlag (true);             goto opt; }
     "nested-ifs"            end { opts.set_sFlag (true);             goto opt; }
@@ -178,20 +189,25 @@ opt_long:
         goto opt;
     }
 
+    "lang"                  end { NEXT_ARG("--lang",             opt_lang); }
     "output"                end { NEXT_ARG("-o, --output",       opt_output); }
     "type-header"           end { NEXT_ARG("-t, --type-header",  opt_header); }
+    "depfile"               end { NEXT_ARG("--depfile",          opt_depfile); }
     "encoding-policy"       end { NEXT_ARG("--encoding-policy",  opt_encoding_policy); }
     "input"                 end { NEXT_ARG("--input",            opt_input); }
     "empty-class"           end { NEXT_ARG("--empty-class",      opt_empty_class); }
     "location-format"       end { NEXT_ARG("--location-format",  opt_location_format); }
     "input-encoding"        end { NEXT_ARG("--input-encoding",   opt_input_encoding); }
 
-    "single-pass"           end { goto opt; } // deprecated
+     // deprecated
+    "single-pass"           end { goto opt; }
+    "reusable"              end { goto opt; }
 
     // internals
     "dfa-minimization"      end { NEXT_ARG("--dfa-minimization", opt_dfa_minimization); }
     "posix-closure"         end { NEXT_ARG("--posix-closure",    opt_posix_closure); }
     "posix-prectable"       end { NEXT_ARG("--posix-prectable",  opt_posix_prectable); }
+    "fixed-tags"            end { NEXT_ARG("--fixed-tags",       opt_fixed_tags); }
     "no-lookahead"          end { globopts.lookahead = false;     goto opt; }
     "no-optimize-tags"      end { globopts.optimize_tags = false; goto opt; }
     "eager-skip"            end { globopts.eager_skip = true;     goto opt; }
@@ -210,16 +226,29 @@ opt_long:
     "dump-closure-stats"    end { globopts.dump_closure_stats = true; goto opt; }
 */
 
+opt_lang:
+/*!re2c
+    * { ERRARG("--lang", "c | go", *argv); }
+    "c"  end { globopts.lang = LANG_C;  goto opt; }
+    "go" end { globopts.lang = LANG_GO; goto opt; }
+*/
+
 opt_output:
 /*!re2c
     * { ERRARG("-o, --output", "filename", *argv); }
-    filename end { opts.set_output_file (*argv); goto opt; }
+    filename end { globopts.output_file = *argv; goto opt; }
 */
 
 opt_header:
 /*!re2c
     * { ERRARG("-t, --type-header", "filename", *argv); }
     filename end { opts.set_header_file (*argv); goto opt; }
+*/
+
+opt_depfile:
+/*!re2c
+    * { ERRARG("--depfile", "filename", *argv); }
+    filename end { globopts.dep_file = *argv; goto opt; }
 */
 
 opt_incpath:
@@ -286,12 +315,20 @@ opt_posix_prectable:
     "complex" end { globopts.posix_prectable = POSIX_PRECTABLE_COMPLEX; goto opt; }
 */
 
+opt_fixed_tags:
+/*!re2c
+    * { ERRARG("--fixed-tags", "none | toplevel | all", *argv); }
+    "none"     end { globopts.fixed_tags = FIXTAG_NONE;     goto opt; }
+    "toplevel" end { globopts.fixed_tags = FIXTAG_TOPLEVEL; goto opt; }
+    "all"      end { globopts.fixed_tags = FIXTAG_ALL;      goto opt; }
+*/
+
 end:
-    if (!opts.source_file) {
-        error ("no source file");
+    if (globopts.source_file.empty()) {
+        error("no source file");
         return EXIT_FAIL;
     }
-    globopts.fix();
+    opts.fix_global_and_defaults();
 
     return OK;
 

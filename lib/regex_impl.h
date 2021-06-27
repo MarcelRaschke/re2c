@@ -164,13 +164,25 @@ typedef simctx_t<zhistory_t> pzsimctx_t;
 typedef simctx_t<zhistory_t> lzsimctx_t;
 typedef simctx_t<khistory_t> ksimctx_t;
 
-int regexec_dfa(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_posix(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_posix_trie(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_posix_backward(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_posix_kuklewicz(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_leftmost(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
-int regexec_nfa_leftmost_trie(const regex_t *preg, const char *string, size_t nmatch, regmatch_t pmatch[], int eflags);
+// regexec functions
+typedef int (regexec_t)(const regex_t*, const char*, size_t, regmatch_t[], int);
+template<bool stadfa> regexec_t regexec_dfa;
+template<typename ctx_t> regexec_t regexec_dfa_regless;
+regexec_t regexec_nfa_posix;
+regexec_t regexec_nfa_posix_trie;
+regexec_t regexec_nfa_posix_backward;
+regexec_t regexec_nfa_posix_kuklewicz;
+regexec_t regexec_nfa_leftmost;
+regexec_t regexec_nfa_leftmost_trie;
+
+// regparse functions (non-standard)
+typedef subhistory_t*(regparse_t)(const regex_t*, const char*, size_t);
+template<bool stadfa> regparse_t regparse_dfa;
+template<typename ctx_t> regparse_t regparse_dfa_regless;
+
+// regtstring function (non-standard)
+template<typename ctx_t>
+const tstring_t *regtstring_dfa_regless(const regex_t*, const char*);
 
 template<typename history_t>
 simctx_t<history_t>::simctx_t(const nfa_t &nfa, const nfa_t *nfa0, size_t re_nsub, int flags)
@@ -305,12 +317,11 @@ struct getoff_dfa_t
         regoff_t off;
         if (!fixed(tag)) {
             off = regs[dfa->finvers[idx]];
-        }
-        else {
-            off = tag.base == Tag::RIGHTMOST
-                ? len : regs[dfa->finvers[tag.base]];
-            DASSERT (off != -1);
-            off -= static_cast<regoff_t>(tag.dist);
+        } else {
+            off = tag.base == Tag::RIGHTMOST ? len : regs[dfa->finvers[tag.base]];
+            if (off != -1) {
+                off -= static_cast<regoff_t>(tag.dist);
+            }
         }
         return off;
     }

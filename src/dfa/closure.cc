@@ -78,14 +78,13 @@ namespace re2c {
  * Thus in general TDFA(1) raises less conflicts than TDFA(0).
  */
 
-template<typename ctx_t> static inline void closure(ctx_t &ctx);
 template<typename ctx_t> static void generate_versions(ctx_t &);
 template<typename ctx_t> static void generate_stadfa_actions(ctx_t &);
 template<typename ctx_t> void prune(ctx_t &ctx);
 static void lower_lookahead_to_transition(closure_t &);
 static bool cmpby_rule_state(const clos_t &, const clos_t &);
 
-// explicit specialization for context types
+// explicit instantiation for context types
 template void tagged_epsilon_closure<pdetctx_t>(pdetctx_t &ctx);
 template void tagged_epsilon_closure<ldetctx_t>(ldetctx_t &ctx);
 
@@ -108,8 +107,7 @@ void tagged_epsilon_closure(ctx_t &ctx)
     }
 }
 
-template<>
-inline void closure<pdetctx_t>(pdetctx_t &ctx)
+template<> void closure<pdetctx_t>(pdetctx_t &ctx)
 {
     closure_posix(ctx);
     prune(ctx);
@@ -117,8 +115,7 @@ inline void closure<pdetctx_t>(pdetctx_t &ctx)
     compute_prectable(ctx);
 }
 
-template<>
-inline void closure<ldetctx_t>(ldetctx_t &ctx)
+template<> void closure<ldetctx_t>(ldetctx_t &ctx)
 {
     closure_leftmost(ctx);
     prune(ctx);
@@ -167,7 +164,7 @@ void prune(ctx_t &ctx)
         // mark dropped rules as shadowed
         if (ctx.dc_msg.warn.is_set(Warn::UNREACHABLE_RULES)) {
             std::valarray<Rule> &rules = ctx.nfa.rules;
-            const uint32_t l = rules[f->state->rule].code->loc.line;
+            const uint32_t l = rules[f->state->rule].semact->loc.line;
             for (i = b; i != e; ++i) {
                 if (i != f && i->state->type == nfa_state_t::FIN) {
                     rules[i->state->rule].shadow.insert(l);

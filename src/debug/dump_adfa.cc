@@ -10,7 +10,7 @@
 
 #include "src/adfa/action.h"
 #include "src/adfa/adfa.h"
-#include "src/codegen/go.h"
+#include "src/codegen/code.h"
 #include "src/debug/debug.h"
 #include "src/dfa/tcmd.h"
 #include "src/regexp/rule.h"
@@ -71,6 +71,7 @@ void dump_adfa(const DFA &dfa)
                     name ? name->c_str() : "/", dfa.finvers[t]);
             }
         }
+        dump_tcmd(dfa.tcpool[s->stadfa_tags]);
         dump_tcmd(dfa.tcpool[s->go.tags]);
         fprintf(stderr, "\" %s]\n", attr);
 
@@ -84,7 +85,7 @@ void dump_adfa(const DFA &dfa)
             }
         }
 
-        const Span *x = s->go.span, *e = x + s->go.nSpans;
+        const Span *x = s->go.span, *e = x + s->go.nspans;
         for (uint32_t lb = 0; x < e; lb = x->ub, ++x) {
             if (!x->to) continue;
 

@@ -6,7 +6,6 @@
 #include <valarray>
 #include <vector>
 
-#include "src/codegen/input_api.h"
 #include "src/regexp/re.h"
 #include "src/regexp/rule.h"
 #include "src/regexp/tag.h"
@@ -24,7 +23,7 @@ static const uint32_t NOCLOS = ~0u;
 
 struct nfa_state_t
 {
-    enum type_t {ALT, RAN, TAG, FIN, NIL} type;
+    enum type_t {ALT, RAN, TAG, FIN} type;
     union
     {
         struct
@@ -42,10 +41,6 @@ struct nfa_state_t
             nfa_state_t *out;
             tag_info_t info;
         } tag;
-        struct
-        {
-            nfa_state_t *out;
-        } nil;
     };
     size_t rule;
 
@@ -92,12 +87,6 @@ struct nfa_state_t
     void make_fin(size_t r)
     {
         type = FIN;
-        init(r);
-    }
-    void make_nil(size_t r, nfa_state_t *s)
-    {
-        type = NIL;
-        nil.out = s;
         init(r);
     }
 };

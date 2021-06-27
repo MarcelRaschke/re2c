@@ -125,7 +125,8 @@ void init_gor1(ctx_t &ctx)
     // init: push configurations ordered by POSIX precedence (highest on top)
     state.clear();
     std::sort(reach.begin(), reach.end(), cmp_gor1_t<ctx_t>(ctx));
-    for (typename ctx_t::rcconfiter_t c = reach.rbegin(); c != reach.rend(); ++c) {
+    typename ctx_t::rcconfiter_t c = reach.rbegin(), e = reach.rend();
+    for (; c != e; ++c) {
         nfa_state_t *q = c->state;
         if (q->clos == NOCLOS) {
             q->clos = static_cast<uint32_t>(state.size());
@@ -147,12 +148,6 @@ bool scan(ctx_t &ctx, nfa_state_t *q, bool all)
     const conf_t x = ctx.state[q->clos];
 
     switch (q->type) {
-        case nfa_state_t::NIL:
-            if (q->arcidx == 0) {
-                any |= relax_gor1(ctx, conf_t(x, q->nil.out));
-                ++q->arcidx;
-            }
-            break;
         case nfa_state_t::ALT:
             if (q->arcidx == 0) {
                 any |= relax_gor1(ctx, conf_t(x, q->alt.out1));
@@ -256,9 +251,6 @@ void closure_posix_gtop(ctx_t &ctx)
         const conf_t x = ctx.state[q->clos];
 
         switch (q->type) {
-            case nfa_state_t::NIL:
-                relax_gtop(ctx, conf_t(x, q->nil.out));
-                break;
             case nfa_state_t::ALT:
                 relax_gtop(ctx, conf_t(x, q->alt.out1));
                 relax_gtop(ctx, conf_t(x, q->alt.out2));

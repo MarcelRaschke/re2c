@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "src/codegen/output.h"
+#include "src/codegen/code.h"
 #include "src/compile.h"
 #include "src/msg/msg.h"
 #include "src/msg/warn.h"
@@ -24,7 +24,7 @@ int main(int, char *argv[])
     }
 
     Scanner scanner(&globopts, msg);
-    if (!scanner.open(opts.source_file, NULL)) {
+    if (!scanner.open(globopts.source_file, NULL)) {
         return 1;
     }
 
@@ -37,6 +37,10 @@ int main(int, char *argv[])
     }
 
     if (msg.warn.error()) {
+        return 1;
+    }
+
+    if (!scanner.gen_dep_file()) {
         return 1;
     }
 

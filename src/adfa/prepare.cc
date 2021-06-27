@@ -7,8 +7,7 @@
 
 #include "src/adfa/action.h"
 #include "src/adfa/adfa.h"
-#include "src/codegen/bitmap.h"
-#include "src/codegen/go.h"
+#include "src/codegen/code.h"
 #include "src/debug/debug.h"
 #include "src/dfa/tcmd.h"
 #include "src/msg/msg.h"
@@ -32,7 +31,7 @@ void DFA::split(State *s)
     move->rule_tags = s->rule_tags;
     move->fall_tags = s->fall_tags;
     s->rule = Rule::NONE;
-    s->go.nSpans = 1;
+    s->go.nspans = 1;
     s->go.span = allocate<Span> (1);
     s->go.span[0].ub = ubChar;
     s->go.span[0].to = move;
@@ -43,8 +42,8 @@ static uint32_t merge(Span *x, State *fg, State *bg, const opt_t *opts)
 {
     Span *f = fg->go.span;
     Span *b = bg->go.span;
-    Span *const fe = f + fg->go.nSpans;
-    Span *const be = b + bg->go.nSpans;
+    Span *const fe = f + fg->go.nspans;
+    Span *const be = b + bg->go.nspans;
     Span *const x0 = x;
     const uint32_t eofub = opts->eof + 1;
 
@@ -90,7 +89,7 @@ void DFA::findBaseState(const opt_t *opts)
 
     for (State *s = head; s; s = s->next) {
         if (s->fill == 0) {
-            for (uint32_t i = 0; i < s->go.nSpans; ++i) {
+            for (uint32_t i = 0; i < s->go.nspans; ++i) {
                 State *to = s->go.span[i].to;
 
                 if (to->isBase
@@ -99,13 +98,13 @@ void DFA::findBaseState(const opt_t *opts)
                     DASSERT(s->stadfa_tags == TCID0);
 
                     to = to->go.span[0].to;
-                    uint32_t nSpans = merge(span, s, to, opts);
+                    uint32_t nspans = merge(span, s, to, opts);
 
-                    if (nSpans < s->go.nSpans) {
+                    if (nspans < s->go.nspans) {
                         operator delete (s->go.span);
-                        s->go.nSpans = nSpans;
-                        s->go.span = allocate<Span> (nSpans);
-                        memcpy(s->go.span, span, nSpans*sizeof(Span));
+                        s->go.nspans = nspans;
+                        s->go.span = allocate<Span> (nspans);
+                        memcpy(s->go.span, span, nspans*sizeof(Span));
                         break;
                     }
                 }
@@ -153,7 +152,7 @@ void DFA::prepare(const opt_t *opts)
 {
     // create rule states
     for (State *s = head; s; s = s->next) {
-        if (s->rule != Rule::NONE) {
+        if (s->rule != Rule::NONE && s->rule != eof_rule) {
             if (!finstates[s->rule]) {
                 State *n = new State;
                 if (s->rule == def_rule) {
@@ -163,30 +162,51 @@ void DFA::prepare(const opt_t *opts)
                 finstates[s->rule] = n;
                 addState(n, s);
             }
-            for (uint32_t i = 0; i < s->go.nSpans; ++i) {
+            for (uint32_t i = 0; i < s->go.nspans; ++i) {
                 if (!s->go.span[i].to) {
                     s->go.span[i].to = finstates[s->rule];
                     s->go.span[i].tags = s->rule_tags;
                 }
             }
         }
+
+        // last state, add EOF rule if needed (see note [EOF rule handling])
+        if (!s->next && opts->eof != NOEOF) {
+            eof_state = new State;
+            eof_state->action.set_rule(eof_rule);
+            finstates[eof_rule] = eof_state;
+            addState(eof_state, s);
+            break;
+        }
     }
 
     // create default state (if needed)
-    State * default_state = NULL;
-    for (State * s = head; s; s = s->next)
-    {
-        for (uint32_t i = 0; i < s->go.nSpans; ++i)
-        {
-            if (!s->go.span[i].to)
-            {
-                if (!default_state)
-                {
-                    default_state = new State;
-                    defstate = default_state;
+    State *default_state = NULL;
+    for (State *s = head; s; s = s->next) {
+        for (uint32_t i = 0; i < s->go.nspans; ++i) {
+            if (!s->go.span[i].to) {
+                if (!default_state) {
+                    default_state = defstate = new State;
                     addState(default_state, s);
                 }
                 s->go.span[i].to = defstate;
+            }
+        }
+    }
+
+    // With EOF rule there is a default quasi-transition on YYFILL failure, so
+    // default state is needed if there is at least one final state with at
+    // least one outgoing transition to a non-final state.
+    if (!default_state && opts->eof != NOEOF) {
+        bool have_fallback_states = false;
+
+        for (State *s = head; s; s = s->next) {
+            have_fallback_states |= s->fallback;
+
+            if (!s->next && have_fallback_states) {
+                default_state = defstate = new State;
+                addState(default_state, s);
+                break;
             }
         }
     }
@@ -195,7 +215,8 @@ void DFA::prepare(const opt_t *opts)
     if (default_state) {
         for (State *s = head; s; s = s->next) {
             if (s->fallback) {
-                const std::pair<const State*, tcid_t> acc(finstates[s->rule], s->fall_tags);
+                DASSERT(s->rule != eof_rule); // see note [EOF rule handling]
+                const std::pair<State*, tcid_t> acc(finstates[s->rule], s->fall_tags);
                 s->action.set_save(accepts.find_or_add(acc));
             }
         }
@@ -214,15 +235,10 @@ void DFA::prepare(const opt_t *opts)
         s->isBase = false;
 
         if (s->fill != 0) {
-            for (uint32_t i = 0; i < s->go.nSpans; ++i) {
+            for (uint32_t i = 0; i < s->go.nspans; ++i) {
                 if (s->go.span[i].to == s) {
                     s->isBase = true;
                     split(s);
-
-                    if (opts->bFlag) {
-                        bitmaps.insert(&s->next->go, s);
-                    }
-
                     s = s->next;
                     break;
                 }
@@ -236,20 +252,16 @@ void DFA::prepare(const opt_t *opts)
     if (opts->eager_skip) {
         hoist_tags_and_skip(opts);
     }
-
-    for (State *s = head; s; s = s->next) {
-        s->go.init(s, opts, bitmaps);
-    }
 }
 
-void DFA::calc_stats(const opt_t *opts)
+void DFA::calc_stats(OutputBlock &out)
 {
+    const opt_t *opts = out.opts;
+
     // calculate 'YYMAXFILL'
     max_fill = 0;
-    for (State * s = head; s; s = s->next)
-    {
-        if (max_fill < s->fill)
-        {
+    for (State * s = head; s; s = s->next) {
+        if (max_fill < s->fill) {
             max_fill = s->fill;
         }
     }
@@ -280,16 +292,44 @@ void DFA::calc_stats(const opt_t *opts)
 
     // error if tags are not enabled, but we need them
     if (!opts->tags && maxtagver > 1) {
-        msg.fatal(loc, "overlapping trailing contexts need "
+        msg.error(loc, "overlapping trailing contexts need "
             "multiple context markers, use '-t, --tags' "
             "option and '/*!stags:re2c ... */' directive");
+        exit(1);
+    }
+
+    if (!oldstyle_ctxmarker) {
+        for (size_t i = 0; i < tags.size(); ++i) {
+            const Tag &tag = tags[i];
+            if (history(tag)) {
+                mtagvars.insert(*tag.name);
+            }
+            else if (tag.name) {
+                stagvars.insert(*tag.name);
+            }
+        }
+        for (tagver_t v = 1; v <= maxtagver; ++v) {
+            const std::string s = vartag_name(v, opts->tags_prefix);
+            if (mtagvers.find(v) != mtagvers.end()) {
+                mtagnames.insert(s);
+            }
+            else {
+                stagnames.insert(s);
+            }
+        }
+        out.stags.insert(stagnames.begin(), stagnames.end());
+        out.mtags.insert(mtagnames.begin(), mtagnames.end());
+    }
+
+    if (!cond.empty()) {
+        out.types.push_back(cond);
     }
 }
 
 static bool can_hoist_tags(const State *s, const opt_t *opts)
 {
     Span *span = s->go.span;
-    const size_t nspan = s->go.nSpans;
+    const size_t nspan = s->go.nspans;
     DASSERT(nspan != 0);
 
     if (nspan == 1 && s->rule != Rule::NONE) return false;
@@ -302,11 +342,32 @@ static bool can_hoist_tags(const State *s, const opt_t *opts)
         }
     }
 
-    // if EOF rule is used, also check final/fallback tags, as it can be that
-    // EOF is reached and the final/fallback transition should be taken.
+    // If end-of-input rule $ is used, check that final/fallback tags agree with
+    // other tags, as the lexer may follow the final/fallback transition.
     if (opts->eof != NOEOF
-            && tags != (s->rule == Rule::NONE ? s->fall_tags : s->rule_tags)) {
+        && tags != (s->rule == Rule::NONE ? s->fall_tags : s->rule_tags)) {
         return false;
+    }
+
+    // No need to check idempotence of tag operations in case of the end-of-input
+    // rule $, as they are applied before YYFILL label and there is no risk of
+    // re-application if the current input character is re-scanned after YYFILL.
+    return true;
+}
+
+static bool can_hoist_skip(const State *s, const opt_t *opts)
+{
+    Span *span = s->go.span;
+    const size_t nspan = s->go.nspans;
+
+    // If the end-of-input rule $ is used, skip cannot be hoisted because the
+    // lexer may need to rescan the current input character after YYFILL, and
+    // skip operation will be applied twice.
+    if (opts->eof != NOEOF) return false;
+
+    // All spans must agree on skip, and they all must be consuming.
+    for (uint32_t i = 0; i < nspan; ++i) {
+        if (!consume(span[i].to)) return false;
     }
 
     return true;
@@ -316,7 +377,7 @@ void DFA::hoist_tags(const opt_t *opts)
 {
     for (State * s = head; s; s = s->next) {
         Span *span = s->go.span;
-        const size_t nspan = s->go.nSpans;
+        const size_t nspan = s->go.nspans;
         if (nspan == 0) continue;
 
         if (can_hoist_tags(s, opts)) {
@@ -334,21 +395,12 @@ void DFA::hoist_tags_and_skip(const opt_t *opts)
 
     for (State * s = head; s; s = s->next) {
         Span *span = s->go.span;
-        const size_t nspan = s->go.nSpans;
+        const size_t nspan = s->go.nspans;
         if (nspan == 0) continue;
 
-        // do all spans agree on tags?
+        // check if it is possible to hoist tags and/or skip
         bool hoist_tags = can_hoist_tags(s, opts);
-
-        // do all spans agree on skip?
-        bool hoist_skip = true;
-        for (uint32_t i = 0; i < nspan; ++i) {
-            if (consume(span[i].to) != consume(span[0].to)) {
-                hoist_skip = false;
-                break;
-            }
-        }
-
+        bool hoist_skip = can_hoist_skip(s, opts);
         if (opts->lookahead) {
             // skip must go after tags
             hoist_skip &= hoist_tags;
@@ -357,7 +409,7 @@ void DFA::hoist_tags_and_skip(const opt_t *opts)
             hoist_tags &= hoist_skip;
         }
 
-        // hoisting tags is possible
+        // hoist tags if possible
         if (hoist_tags) {
             s->go.tags = span[0].tags;
             for (uint32_t i = 0; i < nspan; ++i) {
@@ -365,8 +417,8 @@ void DFA::hoist_tags_and_skip(const opt_t *opts)
             }
         }
 
-        // hoisting skip is possible
-        s->go.skip = hoist_skip && consume(span[0].to);
+        // hoist skip if possible
+        s->go.skip = hoist_skip;
     }
 }
 

@@ -32,7 +32,7 @@ namespace re2c {
  * cannot be topsorted and are appended at the end of the list.
  */
 
-// explicit specialization for history types
+// explicit instantiation for history types
 template tcmd_t *tcpool_t::make_add<phistory_t>(tcmd_t *next, tagver_t lhs
     , tagver_t rhs, const phistory_t &history, hidx_t hidx, size_t tag);
 template tcmd_t *tcpool_t::make_add<lhistory_t>(tcmd_t *next, tagver_t lhs
@@ -56,44 +56,25 @@ bool tcmd_t::equal_history(const tagver_t *h, const tagver_t *g)
     }
 }
 
-bool tcmd_t::iscopy(const tcmd_t *x)
-{
-    return x->rhs != TAGVER_ZERO && x->history[0] == TAGVER_ZERO;
-}
-
-bool tcmd_t::isset(const tcmd_t *x)
-{
-    if (x->rhs == TAGVER_ZERO) {
-        DASSERT(x->history[0] != TAGVER_ZERO);
-        return true;
-    }
-    return false;
-}
-
-bool tcmd_t::isadd(const tcmd_t *x)
-{
-    return x->rhs != TAGVER_ZERO && x->history[0] != TAGVER_ZERO;
-}
-
 tcmd_t **tcmd_t::topsort(tcmd_t **phead, tcmd_t *end, uint32_t *indeg)
 {
-    tcmd_t *x0 = *phead, *x, *y0 = NULL, **py;
+    tcmd_t *head = *phead, **ptail;
 
     // initialize in-degree
-    for (x = x0; x != end; x = x->next) {
+    for (tcmd_t *x = head; x != end; x = x->next) {
         indeg[x->lhs] = indeg[x->rhs] = 0;
     }
-    for (x = x0; x != end; x = x->next) {
+    for (tcmd_t *x = head; x != end; x = x->next) {
         ++indeg[x->rhs];
     }
 
-    for (py = &y0;;) {
+    for (ptail = phead;;) {
         // reached end of list, stop
-        if (x0 == end) break;
+        if (head == end) break;
 
         // topsorted commands are pushed on y-list, the rest on x-list
-        tcmd_t **px = &x0, **py1 = py;
-        for (x = x0; x != end; x = x->next) {
+        tcmd_t **px = &head, **py = ptail;
+        for (tcmd_t *x = head; x != end; x = x->next) {
             if (indeg[x->lhs] == 0) {
                 --indeg[x->rhs];
                 *py = x;
@@ -105,19 +86,17 @@ tcmd_t **tcmd_t::topsort(tcmd_t **phead, tcmd_t *end, uint32_t *indeg)
         }
         *px = end;
 
-        // only cycles left, stop
-        if (py == py1) break;
+        // nothing added on the y-list => only cycles left, stop
+        if (ptail == py) break;
+        ptail = py;
     }
 
     // append cycles at the end, or just set last 'next' pointer to end
-    *py = x0;
-
-    // overwrite the old head with the head of topsorted y-list
-    *phead = y0;
+    *ptail = head;
 
     // return the first non-trivial cycle on x-list (if any), or nil
-    for (; (x = *py) != end && x->lhs == x->rhs; py = &x->next);
-    return *py == end ? NULL : py;
+    for (tcmd_t *x; (x = *ptail) != end && x->lhs == x->rhs; ptail = &x->next);
+    return *ptail == end ? NULL : ptail;
 }
 
 tcpool_t::tcpool_t()

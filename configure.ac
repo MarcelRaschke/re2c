@@ -1,5 +1,6 @@
-AC_INIT([re2c],[1.3],[re2c-general@lists.sourceforge.net])
-AM_INIT_AUTOMAKE([foreign subdir-objects dist-xz no-dist-gzip])
+AC_INIT([re2c],[2.1.1],[re2c-general@lists.sourceforge.net])
+AC_CONFIG_AUX_DIR([build-aux])
+AM_INIT_AUTOMAKE([foreign subdir-objects dist-xz dist-lzip no-dist-gzip])
 AM_SILENT_RULES([yes])
 
 
@@ -34,6 +35,17 @@ AM_COND_IF([REBUILD_DOCS], [
 ])
 
 
+# --enable-lexers
+AC_ARG_ENABLE([lexers], [AS_HELP_STRING([--enable-lexers], [regenerate lexers])])
+AM_CONDITIONAL([REBUILD_LEXERS], [test "x$enable_lexers" = "xyes"])
+AM_COND_IF([REBUILD_LEXERS], [
+    AC_ARG_VAR(RE2C_FOR_BUILD, re2c executable used to regenerate lexers)
+    AS_IF([test ! -x "$RE2C_FOR_BUILD"], [
+        AC_MSG_ERROR([RE2C_FOR_BUILD must be set to an executable file with --enable-lexers])
+    ])
+])
+
+
 # --enable-libs
 AC_ARG_ENABLE([libs], [AS_HELP_STRING([--enable-libs], [build libraries])])
 AM_CONDITIONAL([WITH_LIBS], [test "x$enable_libs" = "xyes"])
@@ -45,8 +57,35 @@ AM_COND_IF([WITH_LIBS], [
 ])
 
 
+# --enable-golang
+AC_ARG_ENABLE([golang], [AS_HELP_STRING([--enable-golang], [build re2go executable])])
+AM_CONDITIONAL([WITH_GOLANG], [test "x$enable_golang" != "xno"])
+
+
+# --enable-benchmarks
+AC_ARG_ENABLE([benchmarks], [AS_HELP_STRING([--enable-benchmarks],
+    [build benchmarks])])
+AM_CONDITIONAL([WITH_BENCHMARKS], [test "x$enable_benchmarks" = "xyes"])
+AM_COND_IF([WITH_BENCHMARKS], [
+    AC_LANG_PUSH([C++])
+    AC_CHECK_HEADERS([benchmark/benchmark.h], [],
+        [AC_MSG_ERROR([benchmark library is required with --enable-benchmarks])], [[]])
+    AC_LANG_POP([C++])
+])
+AM_CONDITIONAL([WITH_JAVA], [test -n "$JAVA_HOME"])
+
+
+# --enable-benchmarks-regenerate
+AC_ARG_ENABLE([benchmarks_regenerate],
+    [AS_HELP_STRING([--enable-benchmarks-regenerate],
+    [regenerate C code for benchmarks])])
+AM_CONDITIONAL([REGEN_BENCHMARKS],
+    [test "x$enable_benchmarks_regenerate" = "xyes"])
+
+
 # checks for programs
 AC_PATH_PROG(BISON, bison, no)
+AC_CHECK_PROGS(PYTHON, [python3 python])
 AC_PROG_CC # used in skeleton tests
 AC_PROG_CXX
 AC_PROG_INSTALL
@@ -126,10 +165,22 @@ AC_CHECK_SIZEOF([0i8],       [], [[]])
 
 AC_CONFIG_FILES([\
     Makefile \
+    benchmarks/submatch_nfa/Makefile \
+    benchmarks/submatch_dfa_aot/Makefile \
+    benchmarks/submatch_dfa_jit/Makefile \
+    benchmarks/submatch_java/Makefile \
     doc/manpage.rst \
     doc/help.rst \
 ])
-AC_CONFIG_FILES([run_tests.sh], [chmod +x run_tests.sh])
+AC_CONFIG_FILES([run_tests.py],
+    [chmod +x run_tests.py])
+AC_CONFIG_FILES([benchmarks/submatch_dfa_aot/run.py],
+    [chmod +x benchmarks/submatch_dfa_aot/run.py])
+AC_CONFIG_FILES([benchmarks/submatch_java/run.py],
+    [chmod +x benchmarks/submatch_java/run.py])
+
+
+AC_CONFIG_LINKS([benchmarks/submatch_java/chart.js:benchmarks/submatch_java/chart.js])
 
 
 LT_INIT([dlopen win32-dll])
